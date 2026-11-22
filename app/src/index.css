@@ -1,0 +1,107 @@
+@import "tailwindcss";
+
+/* Colour tokens. Light by default; dark follows the operating system unless a
+   data-theme attribute forces one. */
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --surface-2: #eceff3;
+  --border: #d3d9e1;
+  --text: #17202b;
+  --muted: #5a6676;
+  --accent: #2b67a8;
+  --accent-text: #ffffff;
+  --success: #2f7d4f;
+  --danger: #b42318;
+  --danger-bg: #fdecea;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f141b;
+    --surface: #171e27;
+    --surface-2: #202a36;
+    --border: #2e3a48;
+    --text: #e6ebf1;
+    --muted: #9aa6b4;
+    --accent: #6aa6e8;
+    --accent-text: #0b1320;
+    --success: #6fcf97;
+    --danger: #ff8a80;
+    --danger-bg: #3a1c1a;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #0f141b;
+  --surface: #171e27;
+  --surface-2: #202a36;
+  --border: #2e3a48;
+  --text: #e6ebf1;
+  --muted: #9aa6b4;
+  --accent: #6aa6e8;
+  --accent-text: #0b1320;
+  --success: #6fcf97;
+  --danger: #ff8a80;
+  --danger-bg: #3a1c1a;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-text: var(--accent-text);
+  --color-success: var(--success);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  overflow: hidden;
+}
+
+/* Keep the chart SVG from overflowing on narrow windows. */
+.chart-host svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 9999px;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 2.4s;
+  }
+}

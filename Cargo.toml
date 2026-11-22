@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = ["crates/dv-core", "crates/dv-engine", "crates/dv-render", "crates/dv-publish", "crates/dv-cli", "app/src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+clap = { version = "4", features = ["derive"] }
+duckdb = { version = "=1.20000.2", features = ["bundled", "parquet", "json", "vtab-arrow"] }
+tempfile = "3"
+arrow = { version = "60", default-features = false, features = ["ipc"] }
+
+[profile.dev.package.libduckdb-sys]
+opt-level = 3
+
+[profile.test.package.libduckdb-sys]
+opt-level = 3

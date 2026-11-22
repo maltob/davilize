@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "name": "Sample database",
+  "sources": [
+    {
+      "name": "sample_db",
+      "type": "database",
+      "kind": "sqlite",
+      "connection": "sample_db"
+    }
+  ],
+  "datasets": [
+    {
+      "name": "north_orders",
+      "source": "sample_db",
+      "sql": "SELECT * FROM \"sample_db\".\"orders\" WHERE region = 'North'"
+    }
+  ],
+  "visuals": [
+    {
+      "id": "units_by_product",
+      "title": "Units by product",
+      "dataset": "north_orders",
+      "chart": "bar",
+      "encodings": { "x": "product", "y": "units" },
+      "dimensions": ["product"],
+      "measures": [
+        { "field": "units", "agg": "sum", "alias": "units" }
+      ],
+      "sort": { "by": "units", "direction": "desc" }
+    }
+  ],
+  "parameters": []
+}

@@ -1,0 +1,200 @@
+{
+  "version": 1,
+  "name": "Sample sales (parameters)",
+  "sources": [
+    {
+      "name": "sales_csv",
+      "type": "file",
+      "path": "sample.csv",
+      "format": "csv"
+    }
+  ],
+  "datasets": [
+    {
+      "name": "sales",
+      "source": "sales_csv",
+      "calculated_fields": [
+        {
+          "name": "net_revenue",
+          "expression": "revenue * 0.9",
+          "description": "Revenue after a flat 10% discount"
+        },
+        {
+          "name": "big_ticket",
+          "expression": "CASE WHEN net_revenue >= 100 THEN 'yes' ELSE 'no' END",
+          "description": "Uses net_revenue, which is defined above"
+        }
+      ]
+    }
+  ],
+  "visuals": [
+    {
+      "id": "revenue_by_region",
+      "title": "Revenue by region (parameterised)",
+      "dataset": "sales",
+      "chart": "bar",
+      "encodings": {
+        "x": "region",
+        "y": "total_revenue"
+      },
+      "dimensions": [
+        "region"
+      ],
+      "measures": [
+        {
+          "field": "revenue",
+          "agg": "sum",
+          "alias": "total_revenue"
+        }
+      ],
+      "filters": [
+        {
+          "field": "units",
+          "op": "ge",
+          "values": [
+            {
+              "param": "min_units"
+            }
+          ]
+        },
+        {
+          "field": "total_revenue",
+          "op": "gt",
+          "values": [
+            {
+              "param": "min_total"
+            }
+          ],
+          "scope": "aggregate"
+        }
+      ],
+      "sort": {
+        "by": "total_revenue",
+        "direction": "desc"
+      },
+      "limit": {
+        "param": "top"
+      }
+    },
+    {
+      "id": "product_revenue",
+      "title": "Revenue by product for one region and date",
+      "dataset": "sales",
+      "chart": "table",
+      "encodings": {},
+      "dimensions": [
+        "product"
+      ],
+      "measures": [
+        {
+          "field": "revenue",
+          "agg": "sum",
+          "alias": "revenue_total"
+        },
+        {
+          "field": "order_id",
+          "agg": "count",
+          "alias": "orders"
+        }
+      ],
+      "filters": [
+        {
+          "field": "region",
+          "op": "eq",
+          "values": [
+            {
+              "param": "region"
+            }
+          ]
+        },
+        {
+          "field": "order_date",
+          "op": "between",
+          "values": [
+            "2026-01-01",
+            {
+              "param": "until"
+            }
+          ]
+        },
+        {
+          "field": "revenue_total",
+          "op": "between",
+          "values": [
+            0,
+            1000
+          ],
+          "scope": "aggregate"
+        }
+      ],
+      "sort": {
+        "by": "revenue_total",
+        "direction": "desc"
+      }
+    },
+    {
+      "id": "big_ticket_units",
+      "title": "Units by big-ticket flag (calculated field)",
+      "dataset": "sales",
+      "chart": "table",
+      "encodings": {},
+      "dimensions": [
+        "big_ticket"
+      ],
+      "measures": [
+        {
+          "field": "units",
+          "agg": "sum",
+          "alias": "total_units"
+        }
+      ],
+      "filters": [],
+      "sort": {
+        "by": "big_ticket",
+        "direction": "asc"
+      }
+    }
+  ],
+  "parameters": [
+    {
+      "name": "min_units",
+      "type": "integer",
+      "default": 1,
+      "min": 0,
+      "description": "Only rows with at least this many units"
+    },
+    {
+      "name": "min_total",
+      "type": "number",
+      "default": 0,
+      "min": 0,
+      "description": "Only regions whose total revenue exceeds this"
+    },
+    {
+      "name": "top",
+      "type": "integer",
+      "default": 5,
+      "min": 1,
+      "max": 50,
+      "description": "Number of regions to show"
+    },
+    {
+      "name": "region",
+      "type": "string",
+      "default": "North",
+      "allowed": [
+        "North",
+        "South",
+        "East",
+        "West"
+      ],
+      "description": "Region for the product table"
+    },
+    {
+      "name": "until",
+      "type": "date",
+      "default": "2026-03-31",
+      "description": "Last order date included in the product table"
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+[package]
+name = "davilize-app"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Davilize desktop app (Tauri shell over dv-engine and dv-render)"
+
+[lib]
+name = "davilize_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "davilize-app"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+dv-core = { path = "../../crates/dv-core" }
+dv-engine = { path = "../../crates/dv-engine" }
+dv-render = { path = "../../crates/dv-render" }
+duckdb.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+
+[dev-dependencies]
+tempfile.workspace = true

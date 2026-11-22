@@ -1,0 +1,26 @@
+# Build output
+/target/
+**/node_modules/
+**/dist/
+*.tsbuildinfo
+
+# Tauri generated
+/app/src-tauri/gen/
+
+# Local state and secrets (never commit credentials or keys)
+.env
+.env.*
+*.pem
+*.key
+id_*
+known_hosts
+*.stackdump
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Generated sample data
+/examples/*.sqlite
