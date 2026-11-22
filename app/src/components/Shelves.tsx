@@ -15,6 +15,7 @@ import {
   type Slots,
 } from "../model";
 import { FIELD_MIME, type FieldTarget } from "./DataPanel";
+import { ChartIcon } from "./icons";
 
 interface Props {
   visual: Visual;
@@ -102,6 +103,7 @@ export function Shelves({ visual, slots, columns, onSlot, onFieldDrop, onChange 
                       onChange={() => onChange({ chart: chart.value as ChartType })}
                       className="sr-only"
                     />
+                    <ChartIcon chart={chart.value as ChartType} />
                     {chart.label}
                   </label>
                 );
