@@ -3,6 +3,7 @@ name = "dv-publish"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [dependencies]
 opendal = { version = "0.59.5", features = ["services-fs", "services-s3", "services-memory"] }
