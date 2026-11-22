@@ -73,3 +73,61 @@ export function ChartIcon({ chart }: { chart: ChartType }) {
     </svg>
   );
 }
+
+/** Disclosure arrow for collapsible sections. Decorative: the button's text carries the meaning. */
+export function Chevron({ open }: { open: boolean }) {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 16 16"
+      width="12"
+      height="12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={`shrink-0 transition-transform motion-reduce:transition-none ${open ? "rotate-90" : ""}`}
+    >
+      <path d="M6 4l4 4-4 4" />
+    </svg>
+  );
+}
+
+/**
+ * A section heading that shows or hides its content. The button carries
+ * `aria-expanded` and controls the panel whose id is `controls`.
+ */
+export function SectionToggle({
+  title,
+  count,
+  open,
+  controls,
+  headingId,
+  onToggle,
+}: {
+  title: string;
+  count?: number;
+  open: boolean;
+  controls: string;
+  headingId?: string;
+  onToggle: () => void;
+}) {
+  return (
+    <h2 id={headingId} className="min-w-0 flex-1">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={controls}
+        onClick={onToggle}
+        className="flex min-h-7 w-full items-center gap-1.5 rounded px-1 text-left text-xs font-semibold uppercase tracking-wide text-muted hover:text-text focus-visible:outline-2 focus-visible:outline-accent"
+      >
+        <Chevron open={open} />
+        <span className="min-w-0">
+          {title}
+          {count !== undefined && <span className="font-normal"> ({count})</span>}
+        </span>
+      </button>
+    </h2>
+  );
+}

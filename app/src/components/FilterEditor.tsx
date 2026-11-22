@@ -13,8 +13,9 @@ import {
   type ValueDraft,
 } from "../model";
 
+/** Controls are at least 24px tall and text is at least 12px. */
 const control =
-  "rounded-md border border-border bg-surface px-2 py-1 text-sm text-text focus-visible:outline-2 focus-visible:outline-accent";
+  "min-h-6 rounded-md border border-border bg-surface px-2 py-0.5 text-sm text-text focus-visible:outline-2 focus-visible:outline-accent";
 
 interface Props {
   /** Heading shown above the list, for example "Filters" or "Shared filters". */
@@ -43,7 +44,7 @@ export function FilterEditor({ title, filters, columns, parameters, visual, onCh
           type="button"
           onClick={() => first && onChange([...filters, { field: first.name, op: "is_not_null", values: [] }])}
           disabled={!first}
-          className="rounded-md border border-border px-2 py-0.5 text-xs hover:bg-surface-2 disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent"
+          className="min-h-6 rounded-md border border-border px-2 py-0.5 text-xs hover:bg-surface-2 disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent"
         >
           Add filter
         </button>
@@ -174,7 +175,7 @@ function FilterRow({
           type="button"
           onClick={onRemove}
           aria-label={`Remove filter on ${filter.field}`}
-          className="ml-auto rounded px-2 py-0.5 text-sm text-muted hover:bg-surface hover:text-text focus-visible:outline-2 focus-visible:outline-accent"
+          className="ml-auto min-h-6 rounded px-2 py-0.5 text-sm text-muted hover:bg-surface hover:text-text focus-visible:outline-2 focus-visible:outline-accent"
         >
           Remove
         </button>
@@ -197,7 +198,7 @@ function FilterRow({
         <button
           type="button"
           onClick={() => writeValues([...drafts, { kind: "text", text: "" }])}
-          className="self-start rounded-md border border-border px-2 py-0.5 text-xs hover:bg-surface focus-visible:outline-2 focus-visible:outline-accent"
+          className="min-h-6 self-start rounded-md border border-border px-2 py-0.5 text-xs hover:bg-surface focus-visible:outline-2 focus-visible:outline-accent"
         >
           Add value
         </button>
@@ -285,7 +286,7 @@ function ValueRow({
           type="button"
           onClick={onRemove}
           aria-label={`Remove ${label.toLowerCase()}`}
-          className="rounded px-2 py-0.5 text-xs text-muted hover:bg-surface hover:text-text focus-visible:outline-2 focus-visible:outline-accent"
+          className="min-h-6 rounded px-2 py-0.5 text-xs text-muted hover:bg-surface hover:text-text focus-visible:outline-2 focus-visible:outline-accent"
         >
           Remove value
         </button>

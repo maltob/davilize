@@ -14,6 +14,8 @@
 pub mod dashboard;
 pub mod html;
 pub mod raster;
+pub mod style;
+pub mod summary;
 pub mod svg;
 pub mod table;
 pub mod vegalite;
@@ -25,6 +27,7 @@ use serde_json::Value;
 
 pub use dashboard::dashboard_views;
 pub use html::{ChartPlacement, DashboardView, Scripts, html_dashboards, html_report};
+pub use summary::chart_summary;
 pub use table::{Cell, Column, Kind, Sampling, Table};
 
 /// Rows embedded in a spec or rendered per visual before the cap applies.

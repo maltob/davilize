@@ -43,7 +43,21 @@ fn base(title: Value, data: Value) -> Map<String, Value> {
     spec.insert("data".into(), json!({ "values": data }));
     spec.insert("width".into(), json!(WIDTH));
     spec.insert("height".into(), json!(HEIGHT));
+    spec.insert("config".into(), crate::style::chart_config());
     spec
+}
+
+/// Marker shape per series, so line and scatter series differ by shape as well as
+/// colour. Only category colours get shapes; a numeric colour scale keeps circles.
+fn shape_encoding(color: &Field) -> Option<Value> {
+    if !matches!(color.kind, Kind::Nominal) {
+        return None;
+    }
+    Some(json!({
+        "field": color.name,
+        "type": "nominal",
+        "scale": {"range": crate::style::SHAPES}
+    }))
 }
 
 /// Encoding for a field, typed by its column kind.
@@ -93,6 +107,9 @@ fn line(
     if let Some(color) = &channels.color {
         encoding.insert("color".into(), encode(color));
     }
+    if let Some(shape) = channels.color.as_ref().and_then(shape_encoding) {
+        encoding.insert("shape".into(), shape);
+    }
     let mut spec = base(title, rows_json(table, false));
     spec.insert(
         "mark".into(),
@@ -118,6 +135,9 @@ fn scatter(
     }
     if let Some(size) = &channels.size {
         encoding.insert("size".into(), encode(size));
+    }
+    if let Some(shape) = channels.color.as_ref().and_then(shape_encoding) {
+        encoding.insert("shape".into(), shape);
     }
     let mut spec = base(title, rows_json(table, false));
     spec.insert(

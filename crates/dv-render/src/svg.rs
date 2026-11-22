@@ -18,10 +18,8 @@ const LEFT: f64 = 84.0;
 const RIGHT: f64 = 180.0;
 const TOP: f64 = 56.0;
 const BOTTOM: f64 = 96.0;
-const PALETTE: [&str; 10] = [
-    "#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f", "#edc948", "#b07aa1", "#ff9da7",
-    "#9c755f", "#bab0ac",
-];
+/// Series colours are the shared Okabe-Ito palette, so SVG, PNG and the HTML report agree.
+use crate::style::PALETTE;
 const MAX_LEGEND: usize = 20;
 
 /// Renders a bar, line or scatter chart as a standalone SVG document.

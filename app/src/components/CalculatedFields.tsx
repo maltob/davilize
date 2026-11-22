@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { api, toApiError } from "../api";
 import { calcNameError, fieldUsers, withCalculatedField } from "../model";
 import type { CalculatedField, ColumnView, Report } from "../types";
+import { SectionToggle } from "./icons";
 
 const control =
-  "w-full rounded-md border border-border bg-surface px-2 py-1 text-sm text-text focus-visible:outline-2 focus-visible:outline-accent";
+  "min-h-7 w-full rounded-md border border-border bg-surface px-2 py-1 text-sm text-text focus-visible:outline-2 focus-visible:outline-accent";
 const small =
-  "rounded-md border border-border px-2 py-0.5 text-xs hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent";
+  "min-h-7 whitespace-nowrap rounded-md border border-border bg-surface px-2 text-xs font-medium hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent";
 
 interface Props {
   report: Report;
@@ -25,6 +26,7 @@ export function CalculatedFieldsSection({ report, reportPath, dataset, columns, 
   // `null` means the form is closed; `original` is the name being edited, or null for a new field.
   const [editing, setEditing] = useState<{ original: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState(true);
 
   const remove = async (name: string) => {
     setError(null);
@@ -32,19 +34,31 @@ export function CalculatedFieldsSection({ report, reportPath, dataset, columns, 
     if (message) setError(message);
   };
 
+  // Adding a field always shows the section, even when it was collapsed.
+  const startNew = () => {
+    setOpen(true);
+    setEditing({ original: null });
+  };
+
   return (
     <section aria-labelledby="calc-heading" className="flex flex-col gap-1">
-      <div className="flex items-center justify-between gap-2">
-        <h2 id="calc-heading" className="text-xs font-semibold uppercase tracking-wide text-muted">
-          Calculated fields <span className="font-normal">({fields.length})</span>
-        </h2>
-        <button type="button" className={small} onClick={() => setEditing({ original: null })} disabled={editing !== null}>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <SectionToggle
+          title="Calculated fields"
+          count={fields.length}
+          open={open}
+          controls="calc-section"
+          headingId="calc-heading"
+          onToggle={() => setOpen((value) => !value)}
+        />
+        <button type="button" className={small} onClick={startNew} disabled={editing !== null}>
           Add calculated field
         </button>
       </div>
 
+      <div id="calc-section" hidden={!open} className="space-y-1">
       {fields.length === 0 && editing === null && (
-        <p className="px-2 text-sm text-muted">None. A calculated field is an expression over this dataset's columns.</p>
+        <p className="px-2 text-xs text-muted">Example: revenue * 0.9</p>
       )}
 
       {fields.length > 0 && (
@@ -53,13 +67,13 @@ export function CalculatedFieldsSection({ report, reportPath, dataset, columns, 
             const used = fieldUsers(report, dataset, field.name);
             return (
               <li key={field.name} className="flex flex-col gap-0.5 rounded px-1 py-0.5 hover:bg-surface-2">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className="min-w-0 flex-1 truncate text-sm font-medium" title={field.description ?? field.expression}>
                     {field.name}
                   </span>
                   <button
                     type="button"
-                    className="text-xs text-accent underline focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"
+                    className={small}
                     onClick={() => setEditing({ original: field.name })}
                     disabled={editing !== null}
                     aria-label={`Edit calculated field ${field.name}`}
@@ -68,10 +82,10 @@ export function CalculatedFieldsSection({ report, reportPath, dataset, columns, 
                   </button>
                   <button
                     type="button"
-                    className="text-xs text-muted underline hover:text-danger focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50"
+                    className={`${small} hover:text-danger`}
                     onClick={() => remove(field.name)}
                     disabled={used.length > 0 || editing !== null}
-                    title={used.length > 0 ? `Used by ${used.join(", ")}. Remove it from those visuals first.` : undefined}
+                    title={used.length > 0 ? `Used by ${used.join(", ")}. Remove it from those visuals first.` : `Delete calculated field ${field.name}`}
                     aria-label={`Delete calculated field ${field.name}`}
                   >
                     Delete
@@ -109,6 +123,7 @@ export function CalculatedFieldsSection({ report, reportPath, dataset, columns, 
           onCancel={() => setEditing(null)}
         />
       )}
+      </div>
     </section>
   );
 }
@@ -263,7 +278,7 @@ function CalcFieldForm({
         <button
           type="submit"
           disabled={!canSave}
-          className="rounded-md bg-accent px-3 py-1 text-sm font-semibold text-accent-text hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent"
+          className="min-h-8 rounded-md bg-accent px-3 text-sm font-semibold text-accent-text hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent"
         >
           {saving ? "Saving..." : "Save field"}
         </button>

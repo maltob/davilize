@@ -1,4 +1,4 @@
-import { useEffect, useState, type DragEvent } from "react";
+import { useEffect, useState, type DragEvent, type SetStateAction } from "react";
 import type { ChartType, ColumnView, Parameter, Visual } from "../types";
 import {
   AGGREGATES,
@@ -28,8 +28,55 @@ interface Props {
   onChange: (patch: Partial<Visual>) => void;
 }
 
+/** Controls are at least 24px tall and text is at least 12px. */
 const control =
-  "rounded-md border border-border bg-surface px-2 py-1 text-sm text-text focus-visible:outline-2 focus-visible:outline-accent";
+  "min-h-6 rounded-md border border-border bg-surface px-2 py-0.5 text-sm text-text focus-visible:outline-2 focus-visible:outline-accent";
+
+/** What each chart type needs on its shelves. Shown under the chart-type picker. */
+export const CHART_HINTS: Record<ChartType, string> = {
+  bar: "Bar: one category on Columns, one measure on Rows. Color adds a series.",
+  line: "Line: one date or ordered dimension on Columns, one measure on Rows. Color adds a series.",
+  scatter: "Scatter: one measure on Columns and one on Rows. Color and Size are optional.",
+  table: "Table: each field on Columns or Rows becomes a column, with one row per result.",
+  heatmap: "Heatmap: a dimension on Columns, another on Rows, and a measure on Color.",
+};
+
+/**
+ * Why the chart would draw nothing with these shelves, or null when it can be drawn. The
+ * message says what to add, in the same words the shelves use.
+ */
+export function emptyChartHint(chart: ChartType, slots: Slots): string | null {
+  switch (chart) {
+    case "bar":
+    case "line":
+      if (!slots.y) return "Add a measure to Rows to draw this chart.";
+      if (!slots.x) return "Add a field to Columns to draw this chart.";
+      return null;
+    case "scatter":
+      if (!slots.y) return "Add a measure to Rows to draw this chart.";
+      if (!slots.x) return "Add a measure to Columns to draw this chart.";
+      return null;
+    case "heatmap":
+      if (!slots.color) return "Add a measure to Color to draw this chart.";
+      if (!slots.x || !slots.y) return "Add a field to Columns and Rows to draw this chart.";
+      return null;
+    case "table":
+      return slots.x || slots.y ? null : "Add a field to Columns or Rows to draw this table.";
+  }
+}
+
+/** Whether a field may be dropped on a shelf, and what the drop zone says about it. */
+interface DropCheck {
+  valid: boolean;
+  message: string;
+}
+
+function slotCheck(chart: ChartType, slot: Slot, label: string): DropCheck {
+  if (slot === "size" && chart !== "scatter") {
+    return { valid: false, message: "Size is used by Scatter charts only. Choose Scatter to use it." };
+  }
+  return { valid: true, message: `Drop to place on ${label}.` };
+}
 
 function readDrop(event: DragEvent): ColumnView | null {
   const raw = event.dataTransfer.getData(FIELD_MIME);
@@ -41,43 +88,65 @@ function readDrop(event: DragEvent): ColumnView | null {
   }
 }
 
-/** Drop-target behaviour shared by the slots and the filter shelf. */
-function dropProps(onDrop: (column: ColumnView) => void, setOver: (over: boolean) => void) {
+/** Drop-target behaviour shared by the slots and the filter shelf. Invalid drops are refused. */
+function dropProps(
+  check: DropCheck,
+  onDrop: (column: ColumnView) => void,
+  setDrag: (update: SetStateAction<DropCheck | null>) => void,
+) {
   return {
     onDragOver: (event: DragEvent) => {
-      if (event.dataTransfer.types.includes(FIELD_MIME)) {
+      if (!event.dataTransfer.types.includes(FIELD_MIME)) return;
+      if (check.valid) {
         event.preventDefault();
         event.dataTransfer.dropEffect = "copy";
-        setOver(true);
+      } else {
+        event.dataTransfer.dropEffect = "none";
       }
+      setDrag((prev) => (prev && prev.valid === check.valid && prev.message === check.message ? prev : check));
     },
-    onDragLeave: () => setOver(false),
+    onDragLeave: () => setDrag(null),
     onDrop: (event: DragEvent) => {
       event.preventDefault();
-      setOver(false);
+      setDrag(null);
+      if (!check.valid) return;
       const column = readDrop(event);
       if (column) onDrop(column);
     },
   };
 }
 
+function dropClass(drag: DropCheck | null): string {
+  if (!drag) return "border-border bg-surface";
+  return drag.valid ? "border-accent bg-accent/10" : "border-danger bg-danger-bg";
+}
+
 export function Shelves({ visual, slots, columns, parameters, onSlot, onFieldDrop, onChange }: Props) {
+  const emptyHint = emptyChartHint(visual.chart, slots);
   return (
     <div className="flex flex-col gap-3">
       <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
         {SLOTS.map((slot) => (
           <ShelfSlot
             key={slot.key}
+            id={`shelf-${slot.key}`}
             label={slot.label}
             hint={slot.hint}
             pill={slots[slot.key]}
+            check={slotCheck(visual.chart, slot.key, slot.label)}
+            describedBy={emptyHint ? "shelves-empty-hint" : undefined}
             onDrop={(column) => onFieldDrop(column, slot.key)}
             onChange={(pill) => onSlot(slot.key, pill)}
           />
         ))}
       </div>
+      {emptyHint && (
+        <p id="shelves-empty-hint" role="status" className="rounded-md bg-surface-2 px-2 py-1 text-sm text-text">
+          {emptyHint}
+        </p>
+      )}
 
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1fr_20rem]">
+      <div className="grid grid-cols-1 gap-3">
         <FiltersShelf
           visual={visual}
           columns={columns}
@@ -88,13 +157,18 @@ export function Shelves({ visual, slots, columns, parameters, onSlot, onFieldDro
         <div className="flex flex-col gap-3">
           <fieldset className="flex flex-col gap-1">
             <legend className="text-xs font-semibold uppercase tracking-wide text-muted">Chart type</legend>
-            <div role="radiogroup" aria-label="Chart type" className="grid grid-cols-5 gap-1">
+            <div
+              role="radiogroup"
+              aria-label="Chart type"
+              aria-describedby="chart-type-hint"
+              className="grid grid-cols-5 gap-1"
+            >
               {CHART_TYPES.map((chart) => {
                 const checked = visual.chart === chart.value;
                 return (
                   <label
                     key={chart.value}
-                    className={`cursor-pointer rounded-md border px-1 py-1 text-center text-xs font-medium focus-within:outline-2 focus-within:outline-accent ${
+                    className={`flex min-h-7 cursor-pointer flex-col items-center justify-center rounded-md border px-1 py-0.5 text-center text-xs font-medium focus-within:outline-2 focus-within:outline-accent ${
                       checked ? "border-accent bg-accent/15" : "border-border bg-surface hover:bg-surface-2"
                     }`}
                   >
@@ -112,6 +186,9 @@ export function Shelves({ visual, slots, columns, parameters, onSlot, onFieldDro
                 );
               })}
             </div>
+            <p id="chart-type-hint" className="text-xs text-muted">
+              {CHART_HINTS[visual.chart]}
+            </p>
           </fieldset>
           <div className="grid grid-cols-2 gap-2">
             <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-muted">
@@ -159,33 +236,51 @@ export function Shelves({ visual, slots, columns, parameters, onSlot, onFieldDro
   );
 }
 
+/**
+ * One shelf. Its hint and drop explanation are real text, linked to the section with
+ * aria-describedby. While a field is dragged over it the zone shows whether it is valid.
+ */
 function ShelfSlot({
+  id,
   label,
   hint,
   pill,
+  check,
+  describedBy,
   onDrop,
   onChange,
 }: {
+  id: string;
   label: string;
   hint: string;
   pill: Pill | null;
+  check: DropCheck;
+  describedBy?: string;
   onDrop: (column: ColumnView) => void;
   onChange: (pill: Pill | null) => void;
 }) {
-  const [over, setOver] = useState(false);
+  const [drag, setDrag] = useState<DropCheck | null>(null);
+  const hintId = `${id}-hint`;
+  const bodyId = `${id}-body`;
+  const showBody = drag !== null || pill === null;
+  const described = [hintId, showBody ? bodyId : null, describedBy ?? null].filter(Boolean).join(" ");
   return (
     <section
       aria-label={`${label} shelf`}
-      {...dropProps(onDrop, setOver)}
-      className={`flex min-h-16 flex-col gap-1 rounded-md border-2 border-dashed p-2 ${
-        over ? "border-accent bg-accent/10" : "border-border bg-surface"
-      }`}
+      aria-describedby={described}
+      {...dropProps(check, onDrop, setDrag)}
+      className={`flex min-h-10 flex-wrap items-center gap-x-2 gap-y-1 rounded-md border-2 border-dashed px-2 py-1.5 ${dropClass(drag)}`}
     >
-      <div className="flex items-baseline justify-between gap-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</h3>
-        <span className="text-xs text-muted">{hint}</span>
-      </div>
-      {pill ? <PillView label={label} pill={pill} onChange={onChange} /> : <p className="text-sm text-muted">Drop a field here, or use Add to on the field list.</p>}
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</h3>
+      <span id={hintId} className="text-xs text-muted">
+        {hint}
+      </span>
+      {pill && <PillView label={label} pill={pill} onChange={onChange} />}
+      {showBody && (
+        <p id={bodyId} className={`text-xs ${drag && !drag.valid ? "font-medium text-danger" : "text-muted"}`}>
+          {drag ? drag.message : "Drop a field here"}
+        </p>
+      )}
     </section>
   );
 }
@@ -193,8 +288,8 @@ function ShelfSlot({
 function PillView({ label, pill, onChange }: { label: string; pill: Pill; onChange: (pill: Pill | null) => void }) {
   const id = `${label.replace(/\s+/g, "-").toLowerCase()}-${pill.field}`.replace(/[^A-Za-z0-9_-]/g, "_");
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-md bg-surface-2 px-2 py-1">
-      <span className="min-w-0 truncate font-medium" title={pill.field}>
+    <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-md bg-surface-2 px-2 py-0.5">
+      <span className="min-w-0 truncate text-sm font-medium" title={pill.field}>
         {pill.field}
       </span>
       <label className="sr-only" htmlFor={`${id}-kind`}>
@@ -202,7 +297,7 @@ function PillView({ label, pill, onChange }: { label: string; pill: Pill; onChan
       </label>
       <select
         id={`${id}-kind`}
-        className={`${control} py-0.5 text-xs`}
+        className={`${control} text-xs`}
         value={pill.kind}
         onChange={(event) => {
           const kind = event.target.value as Pill["kind"];
@@ -219,7 +314,7 @@ function PillView({ label, pill, onChange }: { label: string; pill: Pill; onChan
           </label>
           <select
             id={`${id}-agg`}
-            className={`${control} py-0.5 text-xs`}
+            className={`${control} text-xs`}
             value={pill.agg}
             onChange={(event) => onChange({ ...pill, agg: event.target.value as PillAgg })}
           >
@@ -235,7 +330,7 @@ function PillView({ label, pill, onChange }: { label: string; pill: Pill; onChan
         type="button"
         onClick={() => onChange(null)}
         aria-label={`Remove ${pill.field} from ${label}`}
-        className="ml-auto rounded px-2 py-0.5 text-sm text-muted hover:bg-surface hover:text-text focus-visible:outline-2 focus-visible:outline-accent"
+        className="ml-auto min-h-6 rounded px-2 py-0.5 text-sm text-muted hover:bg-surface hover:text-text focus-visible:outline-2 focus-visible:outline-accent"
       >
         Remove
       </button>
@@ -256,15 +351,18 @@ function FiltersShelf({
   onChange: (patch: Partial<Visual>) => void;
   onDrop: (column: ColumnView) => void;
 }) {
-  const [over, setOver] = useState(false);
+  const [drag, setDrag] = useState<DropCheck | null>(null);
+  const valid: DropCheck = { valid: true, message: "Drop to add a row filter on this field." };
   return (
     <section
       aria-label="Filters shelf"
-      {...dropProps(onDrop, setOver)}
-      className={`flex flex-col gap-2 rounded-md border-2 border-dashed p-2 ${
-        over ? "border-accent bg-accent/10" : "border-border bg-surface"
-      }`}
+      aria-describedby="filters-shelf-hint"
+      {...dropProps(valid, onDrop, setDrag)}
+      className={`flex flex-col gap-2 rounded-md border-2 border-dashed p-2 ${dropClass(drag)}`}
     >
+      <p id="filters-shelf-hint" className="text-xs text-muted">
+        {drag ? drag.message : "Filters keep rows that match. Totals filter measures after grouping."}
+      </p>
       <FilterEditor
         title="Filters"
         filters={visual.filters}

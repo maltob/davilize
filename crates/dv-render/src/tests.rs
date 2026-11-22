@@ -74,6 +74,7 @@ fn bar_spec_matches_golden() {
         ]},
         "width": 640,
         "height": 400,
+        "config": crate::style::chart_config(),
         "mark": {"type": "bar", "tooltip": true},
         "encoding": {
             "x": {"field": "region", "type": "nominal", "sort": null},
@@ -356,7 +357,7 @@ fn dashboard_items_are_written_in_reading_order() {
     assert!(at("<h3>Bottom left</h3>") < at("<h3>Bottom right</h3>"));
     assert!(at("id=\"chart-0\"") < at("<h3>Top right</h3>"));
     assert!(at("id=\"chart-0\"") > at("<h3>Top left</h3>"));
-    assert!(at("\"title\":\"Top left\"") < at("\"title\":\"Bottom left\""));
+    assert!(at("id=\"chart-1\"") < at("id=\"chart-2\""));
 }
 
 #[test]
@@ -412,7 +413,7 @@ fn dashboard_charts_fill_their_cell_and_refit_on_resize() {
 fn report_without_dashboards_keeps_the_plain_layout() {
     let page = html_report("r", &[dashboard_chart("p", "Plain")], &Scripts::Cdn).unwrap();
     assert!(page.contains("<section class=\"visual\">"));
-    assert!(page.contains("<div class=\"chart\" id=\"chart-0\"></div>"));
+    assert!(page.contains("<div class=\"chart\" id=\"chart-0\" role=\"img\" aria-label=\"Bar chart: total_revenue by region."));
     assert!(!page.contains("dashboard"));
 }
 
@@ -464,9 +465,9 @@ fn svg_colours_series_alphabetically_like_vega_lite() {
         let fill = text[rect..].find("fill=\"#").unwrap() + rect + 6;
         text[fill..fill + 7].to_string()
     };
-    assert_eq!(legend("North"), "#4e79a7");
-    assert_eq!(legend("South"), "#f28e2b");
-    assert_eq!(legend("West"), "#e15759");
+    assert_eq!(legend("North"), "#b87400");
+    assert_eq!(legend("South"), "#2a7db0");
+    assert_eq!(legend("West"), "#009e73");
 }
 
 fn heat_data() -> RecordBatch {
@@ -609,4 +610,205 @@ fn spec_builders_are_pure_json() {
     let text = serde_json::to_string(&rendered.spec).unwrap();
     let back: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(back, rendered.spec);
+}
+
+#[test]
+fn bar_summary_names_the_measure_axis_count_and_extremes() {
+    let rendered = prepare(
+        &visual("bars", ChartType::Bar, enc("region", "total_revenue")),
+        &[regions()],
+    )
+    .unwrap();
+    assert_eq!(
+        crate::chart_summary(&rendered),
+        "Bar chart: total_revenue by region. 2 bars. Highest: North 150, lowest: South 60."
+    );
+}
+
+#[test]
+fn summary_is_capped_at_250_characters() {
+    let long = "x".repeat(400);
+    let data = batch(vec![
+        (
+            "region",
+            Arc::new(StringArray::from(vec![long.as_str()])) as ArrayRef,
+        ),
+        (
+            "total_revenue",
+            Arc::new(Float64Array::from(vec![1.0])) as ArrayRef,
+        ),
+    ]);
+    let rendered = prepare(
+        &visual("long", ChartType::Bar, enc("region", "total_revenue")),
+        &[data],
+    )
+    .unwrap();
+    let summary = crate::chart_summary(&rendered);
+    assert!(summary.chars().count() <= 250);
+    assert!(summary.ends_with("..."));
+}
+
+#[test]
+fn scatter_and_table_summaries_describe_their_data() {
+    let xs = Arc::new(Float64Array::from(vec![1.0, 4.0, 2.5])) as ArrayRef;
+    let ys = Arc::new(Float64Array::from(vec![10.0, 5.0, 7.5])) as ArrayRef;
+    let scatter = prepare(
+        &visual("s", ChartType::Scatter, enc("x", "y")),
+        &[batch(vec![("x", xs), ("y", ys)])],
+    )
+    .unwrap();
+    assert_eq!(
+        crate::chart_summary(&scatter),
+        "Scatter plot: y against x. 3 points. x from 1 to 4, y from 5 to 10."
+    );
+
+    let table = prepare(
+        &visual("t", ChartType::Table, Encodings::default()),
+        &[regions()],
+    )
+    .unwrap();
+    let summary = crate::chart_summary(&table);
+    assert!(
+        summary.starts_with("Table: 2 rows. Columns: region, total_revenue"),
+        "{summary}"
+    );
+}
+
+#[test]
+fn line_series_get_marker_shapes_but_numeric_colour_does_not() {
+    let categorical = batch(vec![
+        (
+            "day",
+            Arc::new(StringArray::from(vec!["Mon", "Tue"])) as ArrayRef,
+        ),
+        (
+            "v",
+            Arc::new(Float64Array::from(vec![1.0, 2.0])) as ArrayRef,
+        ),
+        ("g", Arc::new(StringArray::from(vec!["a", "b"])) as ArrayRef),
+    ]);
+    let mut e = enc("day", "v");
+    e.color = Some("g".into());
+    let spec = prepare(&visual("l", ChartType::Line, e), &[categorical])
+        .unwrap()
+        .spec;
+    assert_eq!(spec["encoding"]["shape"]["field"], json!("g"));
+    assert_eq!(
+        spec["encoding"]["shape"]["scale"]["range"],
+        json!(crate::style::SHAPES)
+    );
+
+    let numeric = batch(vec![
+        (
+            "x",
+            Arc::new(Float64Array::from(vec![1.0, 2.0])) as ArrayRef,
+        ),
+        (
+            "y",
+            Arc::new(Float64Array::from(vec![1.0, 2.0])) as ArrayRef,
+        ),
+        (
+            "g",
+            Arc::new(Float64Array::from(vec![0.1, 0.9])) as ArrayRef,
+        ),
+    ]);
+    let mut e = enc("x", "y");
+    e.color = Some("g".into());
+    let spec = prepare(&visual("n", ChartType::Scatter, e), &[numeric])
+        .unwrap()
+        .spec;
+    assert!(spec["encoding"].get("shape").is_none());
+}
+
+#[test]
+fn specs_carry_a_theme_neutral_config() {
+    let rendered = prepare(
+        &visual("c", ChartType::Bar, enc("region", "total_revenue")),
+        &[regions()],
+    )
+    .unwrap();
+    assert_eq!(rendered.spec["config"]["background"], json!("transparent"));
+    assert_eq!(
+        rendered.spec["config"]["range"]["category"],
+        json!(crate::style::PALETTE)
+    );
+}
+
+#[test]
+fn html_charts_are_images_named_by_their_summary_with_a_data_table() {
+    let rendered = prepare(
+        &visual("h", ChartType::Bar, enc("region", "total_revenue")),
+        &[regions()],
+    )
+    .unwrap();
+    let page = html_report("R", &[rendered], &Scripts::Cdn).unwrap();
+    assert!(page.contains(
+        "role=\"img\" aria-label=\"Bar chart: total_revenue by region. 2 bars. Highest: North 150, lowest: South 60.\""
+    ));
+    assert!(page.contains("<details class=\"data\">"));
+    assert!(page.contains("<th scope=\"col\">region</th>"));
+    assert!(page.contains("<td class=\"num\">150</td>"));
+    // The card already shows the title, so the embedded spec does not repeat it.
+    assert!(!page.contains("\"title\":\"Title h\""));
+}
+
+#[test]
+fn html_summary_and_table_cells_are_escaped() {
+    let data = batch(vec![
+        (
+            "region",
+            Arc::new(StringArray::from(vec!["<b>x</b>"])) as ArrayRef,
+        ),
+        (
+            "total_revenue",
+            Arc::new(Float64Array::from(vec![1.0])) as ArrayRef,
+        ),
+    ]);
+    let rendered = prepare(
+        &visual("e", ChartType::Bar, enc("region", "total_revenue")),
+        &[data],
+    )
+    .unwrap();
+    let page = html_report("R", &[rendered], &Scripts::Cdn).unwrap();
+    assert!(page.contains("&lt;b&gt;x&lt;/b&gt;"));
+    assert!(!page.contains("<b>x</b>"));
+}
+
+#[test]
+fn data_table_stops_at_200_rows_and_says_so() {
+    let labels: Vec<String> = (0..205).map(|i| format!("row {i}")).collect();
+    let values: Vec<f64> = (0..205).map(f64::from).collect();
+    let data = batch(vec![
+        ("label", Arc::new(StringArray::from(labels)) as ArrayRef),
+        ("v", Arc::new(Float64Array::from(values)) as ArrayRef),
+    ]);
+    let rendered = prepare(
+        &visual("many", ChartType::Table, Encodings::default()),
+        &[data],
+    )
+    .unwrap();
+    let block = crate::html::data_table(&rendered.table);
+    assert_eq!(block.matches("<tr>").count(), 201);
+    assert!(block.contains("Showing first 200 of 205 rows."));
+}
+
+#[test]
+fn dashboard_charts_get_the_same_summary_and_table() {
+    let dash = dashboard(vec![placed(0, 0, 6, 4, "Top")]);
+    let page = html_dashboards("R", &[dash], &Scripts::Cdn).unwrap();
+    assert!(page.contains("role=\"img\" aria-label=\"Bar chart: total_revenue by region."));
+    assert!(page.contains("<details class=\"data\">"));
+}
+
+#[test]
+fn svg_bars_use_the_shared_palette() {
+    let svg_text = svg::render(
+        &prepare(
+            &visual("p", ChartType::Bar, enc("region", "total_revenue")),
+            &[regions()],
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(svg_text.contains(crate::style::PALETTE[0]));
 }

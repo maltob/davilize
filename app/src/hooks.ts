@@ -39,7 +39,7 @@ export function useRender(
       setState({
         loading: false,
         result: null,
-        error: { kind: "invalid", message: "Fix the parameter values above to run this visual." },
+        error: { kind: "invalid", message: "Fix the parameter values above to run this chart." },
       });
       return;
     }

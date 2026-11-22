@@ -313,6 +313,78 @@ pub fn save_report(path: &Path, report: &Report) -> Result<Report, ApiError> {
 }
 
 // ---------------------------------------------------------------------------
+// Sample report
+// ---------------------------------------------------------------------------
+
+/// Folder name of the sample report inside the system temp folder.
+pub const SAMPLE_FOLDER: &str = "davilize-sample";
+
+/// The bundled sample data (the same file as `examples/sample.csv`).
+const SAMPLE_CSV: &str = include_str!("../../../examples/sample.csv");
+
+/// The bundled sample report: one file source, one dataset, two charts and a
+/// dashboard that places both. Relative source paths resolve to the report's folder.
+const SAMPLE_REPORT: &str = r##"{
+  "version": 1,
+  "name": "Sample sales",
+  "sources": [
+    { "name": "sales_csv", "type": "file", "path": "sample.csv", "format": "csv" }
+  ],
+  "datasets": [
+    { "name": "sales", "source": "sales_csv" }
+  ],
+  "visuals": [
+    {
+      "id": "revenue_by_region",
+      "title": "Revenue by region",
+      "dataset": "sales",
+      "chart": "bar",
+      "encodings": { "x": "region", "y": "total_revenue" },
+      "dimensions": ["region"],
+      "measures": [{ "field": "revenue", "agg": "sum", "alias": "total_revenue" }],
+      "sort": { "by": "total_revenue", "direction": "desc" }
+    },
+    {
+      "id": "revenue_by_product",
+      "title": "Revenue by product",
+      "dataset": "sales",
+      "chart": "table",
+      "dimensions": ["product"],
+      "measures": [
+        { "field": "revenue", "agg": "sum", "alias": "revenue_total" },
+        { "field": "order_id", "agg": "count", "alias": "orders" }
+      ],
+      "sort": { "by": "revenue_total", "direction": "desc" }
+    }
+  ],
+  "dashboards": [
+    {
+      "id": "overview",
+      "title": "Overview",
+      "columns": 12,
+      "row_height": 80,
+      "items": [
+        { "visual": "revenue_by_region", "x": 0, "y": 0, "w": 6, "h": 4 },
+        { "visual": "revenue_by_product", "x": 6, "y": 0, "w": 6, "h": 4 }
+      ],
+      "filters": []
+    }
+  ]
+}
+"##;
+
+/// Writes the bundled sample data and report into `folder`, creating it if needed
+/// and overwriting earlier copies. Returns the path of the `.dvz` file.
+pub fn write_sample_report(folder: &Path) -> Result<PathBuf, ApiError> {
+    std::fs::create_dir_all(folder)
+        .map_err(|e| ApiError::new("io", format!("cannot create {}: {e}", folder.display())))?;
+    let report = folder.join("sample.dvz");
+    write_file(&folder.join("sample.csv"), SAMPLE_CSV.as_bytes())?;
+    write_file(&report, SAMPLE_REPORT.as_bytes())?;
+    Ok(report)
+}
+
+// ---------------------------------------------------------------------------
 // Calculated fields
 // ---------------------------------------------------------------------------
 

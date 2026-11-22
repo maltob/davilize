@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test:layout": "node --experimental-strip-types --test src/layout.test.ts",
+    "test": "node --experimental-strip-types --test src/layout.test.ts src/chartText.test.ts src/history.test.ts",
     "tauri": "tauri"
   },
   "dependencies": {

@@ -48,6 +48,8 @@ export const api = {
   registerCalculatedFields: (dataset: Dataset) =>
     invoke<ColumnView[]>("register_calculated_fields", { dataset }),
   cancelQuery: () => invoke<void>("cancel_query"),
+  /** Writes the bundled sample data and report to the temp folder; resolves to the report's absolute `.dvz` path. */
+  createSampleReport: () => invoke<string>("create_sample_report"),
 };
 
 /** Native dialogs. Each returns null when the user cancels. */

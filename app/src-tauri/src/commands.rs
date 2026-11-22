@@ -63,6 +63,18 @@ pub async fn save_report(path: String, report: Report) -> Result<Report, ApiErro
     blocking(move || service::save_report(Path::new(&path), &report)).await
 }
 
+/// Writes the bundled sample report into a `davilize-sample` folder in the user's
+/// temp directory and returns the absolute path of its `.dvz` file.
+#[tauri::command]
+pub async fn create_sample_report() -> Result<String, ApiError> {
+    blocking(|| {
+        let folder = std::env::temp_dir().join(service::SAMPLE_FOLDER);
+        let path = service::write_sample_report(&folder)?;
+        Ok(path.display().to_string())
+    })
+    .await
+}
+
 /// The first rows of a dataset for the preview grid.
 #[tauri::command]
 pub async fn preview_dataset(

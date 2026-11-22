@@ -24,6 +24,7 @@ pub fn run() {
             commands::add_data_files,
             commands::open_report,
             commands::save_report,
+            commands::create_sample_report,
             commands::preview_dataset,
             commands::profile_dataset,
             commands::render_visual,

@@ -8,11 +8,12 @@ import {
   parameterUsers,
 } from "../model";
 import type { ParamType, Parameter, Report } from "../types";
+import { SectionToggle } from "./icons";
 
 const control =
-  "w-full rounded-md border border-border bg-surface px-2 py-1 text-sm text-text focus-visible:outline-2 focus-visible:outline-accent";
+  "min-h-7 w-full rounded-md border border-border bg-surface px-2 py-1 text-sm text-text focus-visible:outline-2 focus-visible:outline-accent";
 const small =
-  "rounded-md border border-border px-2 py-0.5 text-xs hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent";
+  "min-h-7 whitespace-nowrap rounded-md border border-border bg-surface px-2 text-xs font-medium hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent";
 const NAME_RULE = /^[A-Za-z0-9_-]+$/;
 
 function typeLabel(p: Parameter): string {
@@ -30,75 +31,91 @@ export function ParametersSection({
   onDelete: (name: string) => void;
 }) {
   const [editing, setEditing] = useState<{ original: string | null } | null>(null);
+  const [open, setOpen] = useState(true);
   const current = editing?.original ? report.parameters.find((p) => p.name === editing.original) ?? null : null;
+
+  // Adding a parameter always shows the section, even when it was collapsed.
+  const startNew = () => {
+    setOpen(true);
+    setEditing({ original: null });
+  };
 
   return (
     <section aria-labelledby="params-heading" className="flex flex-col gap-1">
-      <div className="flex items-center justify-between gap-2">
-        <h2 id="params-heading" className="text-xs font-semibold uppercase tracking-wide text-muted">
-          Parameters <span className="font-normal">({report.parameters.length})</span>
-        </h2>
-        <button type="button" className={small} onClick={() => setEditing({ original: null })} disabled={editing !== null}>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <SectionToggle
+          title="Parameters"
+          count={report.parameters.length}
+          open={open}
+          controls="params-section"
+          headingId="params-heading"
+          onToggle={() => setOpen((value) => !value)}
+        />
+        <button type="button" className={small} onClick={startNew} disabled={editing !== null}>
           Add parameter
         </button>
       </div>
-      {report.parameters.length === 0 && editing === null && (
-        <p className="px-2 text-sm text-muted">
-          None. A parameter is a value you choose when the report runs, for example a region or a row count.
-        </p>
-      )}
-      {report.parameters.length > 0 && (
-        <ul className="flex flex-col gap-1" aria-label="Parameters">
-          {report.parameters.map((p) => {
-            const used = parameterUsers(report, p.name);
-            return (
-              <li key={p.name} className="flex flex-col gap-0.5 rounded px-1 py-0.5 hover:bg-surface-2">
-                <div className="flex items-center gap-2">
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium" title={p.description ?? p.name}>
-                    {p.name}
-                  </span>
-                  <span className="text-xs text-muted">{typeLabel(p)}</span>
-                  <button
-                    type="button"
-                    className="text-xs text-accent underline focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"
-                    onClick={() => setEditing({ original: p.name })}
-                    disabled={editing !== null}
-                    aria-label={`Edit parameter ${p.name}`}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    className="text-xs text-muted underline hover:text-danger focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50"
-                    onClick={() => {
-                      onDelete(p.name);
-                    }}
-                    disabled={used.length > 0 || editing !== null}
-                    title={used.length > 0 ? `Used by ${used.join(", ")}. Remove it from those visuals first.` : undefined}
-                    aria-label={`Delete parameter ${p.name}`}
-                  >
-                    Delete
-                  </button>
-                </div>
-                {used.length > 0 && <span className="text-xs text-muted">Used by {used.join(", ")}</span>}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {editing && (
-        <ParameterForm
-          key={editing.original ?? "new"}
-          initial={current}
-          takenNames={report.parameters.map((p) => p.name).filter((n) => n !== editing.original)}
-          usedBy={current ? parameterUsers(report, current.name) : []}
-          onSave={(param) => {
-            onSave(param, editing.original);
-            setEditing(null);
-          }}
-          onCancel={() => setEditing(null)}
-        />
-      )}
+      <div id="params-section" hidden={!open} className="space-y-1">
+        {report.parameters.length === 0 && editing === null && (
+          <p className="px-2 text-xs text-muted">Example: a region you can switch without editing the chart</p>
+        )}
+        {report.parameters.length > 0 && (
+          <ul className="flex flex-col gap-1" aria-label="Parameters">
+            {report.parameters.map((p) => {
+              const used = parameterUsers(report, p.name);
+              return (
+                <li key={p.name} className="flex flex-col gap-0.5 rounded px-1 py-0.5 hover:bg-surface-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium" title={p.description ?? p.name}>
+                      {p.name}
+                    </span>
+                    <span className="text-xs text-muted">{typeLabel(p)}</span>
+                    <button
+                      type="button"
+                      className={small}
+                      onClick={() => setEditing({ original: p.name })}
+                      disabled={editing !== null}
+                      aria-label={`Edit parameter ${p.name}`}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className={`${small} hover:text-danger`}
+                      onClick={() => {
+                        onDelete(p.name);
+                      }}
+                      disabled={used.length > 0 || editing !== null}
+                      title={
+                        used.length > 0
+                          ? `Used by ${used.join(", ")}. Remove it from those charts first.`
+                          : `Delete parameter ${p.name}`
+                      }
+                      aria-label={`Delete parameter ${p.name}`}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                  {used.length > 0 && <span className="text-xs text-muted">Used by {used.join(", ")}</span>}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {editing && (
+          <ParameterForm
+            key={editing.original ?? "new"}
+            initial={current}
+            takenNames={report.parameters.map((p) => p.name).filter((n) => n !== editing.original)}
+            usedBy={current ? parameterUsers(report, current.name) : []}
+            onSave={(param) => {
+              onSave(param, editing.original);
+              setEditing(null);
+            }}
+            onCancel={() => setEditing(null)}
+          />
+        )}
+      </div>
     </section>
   );
 }
@@ -297,7 +314,7 @@ function ParameterForm({
         <button
           type="submit"
           disabled={!canSave}
-          className="rounded-md bg-accent px-3 py-1 text-sm font-semibold text-accent-text hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent"
+          className="min-h-8 rounded-md bg-accent px-3 text-sm font-semibold text-accent-text hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent"
         >
           Save parameter
         </button>
@@ -381,7 +398,7 @@ export function ParameterValuesBar({
         type="button"
         onClick={onReset}
         disabled={Object.keys(values).length === 0}
-        className="rounded-md border border-border px-2 py-1 text-xs hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent"
+        className="min-h-7 rounded-md border border-border px-2 text-xs hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent"
       >
         Reset to defaults
       </button>
@@ -411,7 +428,7 @@ function ParamInput({
   let input: ReactNode;
   if (kind === "boolean") {
     input = (
-      <label className="flex items-center gap-2 text-sm">
+      <label className="flex min-h-7 items-center gap-2 text-sm">
         <input
           id={id}
           type="checkbox"
@@ -419,7 +436,7 @@ function ParamInput({
           onChange={(e) => onChange(e.target.checked ? "true" : "false")}
           aria-invalid={error !== null}
           aria-describedby={describedBy}
-          className="h-4 w-4 accent-accent focus-visible:outline-2 focus-visible:outline-accent"
+          className="h-5 w-5 accent-accent focus-visible:outline-2 focus-visible:outline-accent"
         />
         <span>{text === "true" ? "Yes" : text === "false" ? "No" : "Not set"}</span>
       </label>

@@ -367,6 +367,49 @@ fn save_rejects_invalid_reports() {
     assert!(!dir.path().join("bad.dvz").exists());
 }
 
+#[test]
+fn sample_report_writes_files_and_every_chart_renders() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join(SAMPLE_FOLDER);
+    let path = write_sample_report(&folder).unwrap();
+    assert!(folder.is_absolute());
+    assert_eq!(path, folder.join("sample.dvz"));
+    assert_eq!(
+        fs::read_to_string(folder.join("sample.csv")).unwrap(),
+        SAMPLE_CSV
+    );
+    // A second write replaces the earlier copies.
+    assert_eq!(write_sample_report(&folder).unwrap(), path);
+
+    // Open it the way the app opens a report, then render every chart and the dashboard.
+    let (engine, opened) = open_report(&path).unwrap();
+    assert_eq!(opened.report.visuals.len(), 2);
+    assert_eq!(opened.report.dashboards.len(), 1);
+    for visual in &opened.report.visuals {
+        let rendered = render_visual(&engine, visual, &[], &BTreeMap::new()).unwrap();
+        assert!(rendered.row_count > 0, "{} has no rows", visual.id);
+    }
+    let dashboard = &opened.report.dashboards[0];
+    for item in &dashboard.items {
+        let visual = opened
+            .report
+            .visuals
+            .iter()
+            .find(|v| v.id == item.visual)
+            .expect("dashboard item names a visual");
+        let rendered =
+            render_dashboard_visual(&engine, visual, &dashboard.filters, &[], &BTreeMap::new())
+                .unwrap();
+        assert!(
+            rendered.row_count > 0,
+            "{} has no rows on the dashboard",
+            visual.id
+        );
+    }
+    // The stored report passes the same validation as a save.
+    save_report(&dir.path().join("copy.dvz"), &opened.report).unwrap();
+}
+
 // ---------------------------------------------------------------------------
 // Parameters
 // ---------------------------------------------------------------------------
