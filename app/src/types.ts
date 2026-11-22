@@ -2,8 +2,30 @@
 
 export type Aggregate = "sum" | "avg" | "min" | "max" | "count" | "count_distinct";
 export type ChartType = "bar" | "line" | "scatter" | "table" | "heatmap";
-export type FilterOp = "eq" | "ne" | "lt" | "le" | "gt" | "ge" | "in" | "is_null" | "is_not_null";
+/** Filter operators. `between` takes exactly two values: lower, then upper (inclusive). */
+export type FilterOp =
+  | "eq"
+  | "ne"
+  | "lt"
+  | "le"
+  | "gt"
+  | "ge"
+  | "in"
+  | "between"
+  | "is_null"
+  | "is_not_null";
+/** `row` filters dataset rows before grouping (WHERE); `aggregate` filters measure totals (HAVING). */
+export type FilterScope = "row" | "aggregate";
+export type ParamType = "string" | "number" | "integer" | "boolean" | "date";
 export type Family = "number" | "text" | "date" | "bool" | "other";
+
+/** A `{"param": "<name>"}` reference, written in place of a literal value or limit. */
+export interface ParamRef {
+  param: string;
+}
+
+/** A visual's row limit: a number, or a parameter reference. */
+export type Limit = number | ParamRef;
 
 export interface Encodings {
   x?: string | null;
@@ -21,7 +43,10 @@ export interface Measure {
 export interface Filter {
   field: string;
   op: FilterOp;
+  /** Literals or {"param": name} references. Empty for is_null and is_not_null. */
   values: unknown[];
+  /** Omitted for row filters, so existing files serialise unchanged. */
+  scope?: FilterScope;
 }
 
 export interface Sort {
@@ -39,17 +64,37 @@ export interface Visual {
   measures: Measure[];
   filters: Filter[];
   sort?: Sort | null;
-  limit?: number | null;
+  limit?: Limit | null;
 }
 
 export type Source =
   | { name: string; type: "file"; path: string; format: "csv" | "parquet" | "arrow" | "json" }
   | { name: string; type: "database"; kind: "sqlite" | "postgres"; connection: string };
 
+/** A column computed per row from an expression over earlier columns (see docs/reports.md). */
+export interface CalculatedField {
+  name: string;
+  expression: string;
+  description?: string | null;
+}
+
 export interface Dataset {
   name: string;
   source: string;
   sql?: string | null;
+  /** Omitted when empty. */
+  calculated_fields?: CalculatedField[];
+}
+
+/** A report parameter. `type` is omitted when it is implied by `default`. */
+export interface Parameter {
+  name: string;
+  type?: ParamType;
+  default?: unknown;
+  description?: string | null;
+  allowed?: unknown[];
+  min?: unknown;
+  max?: unknown;
 }
 
 export interface Report {
@@ -58,7 +103,7 @@ export interface Report {
   sources: Source[];
   datasets: Dataset[];
   visuals: Visual[];
-  parameters: unknown[];
+  parameters: Parameter[];
 }
 
 export interface ColumnView {
@@ -66,6 +111,8 @@ export interface ColumnView {
   data_type: string;
   family: Family;
   role: "measure" | "dimension";
+  /** True for columns added by a calculated field. */
+  calculated?: boolean;
 }
 
 export interface DatasetSchema {

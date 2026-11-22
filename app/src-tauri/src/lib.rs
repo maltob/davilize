@@ -28,6 +28,8 @@ pub fn run() {
             commands::profile_dataset,
             commands::render_visual,
             commands::export_report,
+            commands::validate_calculated_field,
+            commands::register_calculated_fields,
             commands::cancel_query,
         ])
         .run(tauri::generate_context!())

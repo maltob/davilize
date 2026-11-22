@@ -1,5 +1,7 @@
-import type { ColumnView, Dataset, Source } from "../types";
+import type { CalculatedField, ColumnView, Dataset, Parameter, Report, Source } from "../types";
 import { SLOTS, type Slot } from "../model";
+import { CalculatedFieldsSection } from "./CalculatedFields";
+import { ParametersSection } from "./Parameters";
 import { TypeBadge } from "./icons";
 
 /** MIME type for field drags. The payload is the field's ColumnView as JSON. */
@@ -7,6 +9,8 @@ export const FIELD_MIME = "application/x-davilize-field";
 export type FieldTarget = Slot | "filter";
 
 interface Props {
+  report: Report;
+  reportPath: string | null;
   datasets: Dataset[];
   sources: Source[];
   schemas: Record<string, ColumnView[]>;
@@ -15,9 +19,29 @@ interface Props {
   onSelect: (dataset: string) => void;
   onAddFiles: () => void;
   onAddField: (column: ColumnView, target: FieldTarget) => void;
+  /** Each resolves to an error message, or null when the change was applied. */
+  onSaveCalculated: (dataset: string, field: CalculatedField, original: string | null) => Promise<string | null>;
+  onDeleteCalculated: (dataset: string, name: string) => Promise<string | null>;
+  onSaveParameter: (param: Parameter, original: string | null) => void;
+  onDeleteParameter: (name: string) => void;
 }
 
-export function DataPanel({ datasets, sources, schemas, active, busy, onSelect, onAddFiles, onAddField }: Props) {
+export function DataPanel({
+  report,
+  reportPath,
+  datasets,
+  sources,
+  schemas,
+  active,
+  busy,
+  onSelect,
+  onAddFiles,
+  onAddField,
+  onSaveCalculated,
+  onDeleteCalculated,
+  onSaveParameter,
+  onDeleteParameter,
+}: Props) {
   const columns = active ? schemas[active] ?? [] : [];
   const dimensions = columns.filter((c) => c.role === "dimension");
   const measures = columns.filter((c) => c.role === "measure");
@@ -76,8 +100,17 @@ export function DataPanel({ datasets, sources, schemas, active, busy, onSelect, 
           <p className="text-xs text-muted">
             Drag a field onto a shelf, or use the Add to menu. Numbers start as measures; change the kind on the shelf.
           </p>
+          <CalculatedFieldsSection
+            report={report}
+            reportPath={reportPath}
+            dataset={active}
+            columns={columns}
+            onSave={(field, original) => onSaveCalculated(active, field, original)}
+            onDelete={(name) => onDeleteCalculated(active, name)}
+          />
         </>
       )}
+      <ParametersSection report={report} onSave={onSaveParameter} onDelete={onDeleteParameter} />
     </div>
   );
 }
@@ -113,6 +146,18 @@ function FieldGroup({
               >
                 <TypeBadge family={column.family} role={column.role} />
                 <span className="truncate text-sm">{column.name}</span>
+                {column.calculated && (
+                  <>
+                    <span
+                      aria-hidden="true"
+                      title="Calculated field"
+                      className="shrink-0 rounded bg-accent/15 px-1 font-mono text-[10px] font-semibold text-accent"
+                    >
+                      fx
+                    </span>
+                    <span className="sr-only">(calculated field)</span>
+                  </>
+                )}
               </span>
               <select
                 aria-label={`Add ${column.name} to a shelf`}

@@ -1,15 +1,17 @@
 //! Tauri commands. Each one hands its work to a blocking thread, so a slow
 //! query never stalls the webview. Logic lives in [`crate::service`].
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use dv_core::{Report, Visual};
+use dv_core::{Dataset, Parameter, Report, Visual};
 use tauri::State;
 
 use crate::error::ApiError;
 use crate::service::{
-    self, AddedDataset, ExportFormat, ExportSummary, OpenedReport, QueryTable, RenderedVisual,
+    self, AddedDataset, ColumnView, ExportFormat, ExportSummary, OpenedReport, QueryTable,
+    RenderedVisual,
 };
 use crate::state::AppState;
 
@@ -92,29 +94,78 @@ pub async fn profile_dataset(state: Shared<'_>, dataset: String) -> Result<Query
 }
 
 /// Runs one visual and returns its Vega-Lite spec (built by dv-render).
+/// `parameters` are the report's declarations and `values` the user's text per name
+/// (`{}` uses every default).
 #[tauri::command]
-pub async fn render_visual(state: Shared<'_>, visual: Visual) -> Result<RenderedVisual, ApiError> {
+pub async fn render_visual(
+    state: Shared<'_>,
+    visual: Visual,
+    parameters: Vec<Parameter>,
+    values: BTreeMap<String, String>,
+) -> Result<RenderedVisual, ApiError> {
     let state = state.inner().clone();
     blocking(move || {
         let engine = state.lock_engine()?;
-        service::render_visual(&engine, &visual)
+        service::render_visual(&engine, &visual, &parameters, &values)
     })
     .await
 }
 
 /// Writes every visual of `report` in `format` (html, png, pdf, xlsx, csv) into `dir`.
+/// The report's own `parameters` are bound with `values`, as in a preview.
 #[tauri::command]
 pub async fn export_report(
     state: Shared<'_>,
     report: Report,
     format: String,
     dir: String,
+    values: BTreeMap<String, String>,
 ) -> Result<ExportSummary, ApiError> {
     let state = state.inner().clone();
     blocking(move || {
         let format = ExportFormat::parse(&format)?;
         let engine = state.lock_engine()?;
-        service::export_report(&engine, &report, format, Path::new(&dir))
+        service::export_report(&engine, &report, format, Path::new(&dir), &values)
+    })
+    .await
+}
+
+/// Checks one calculated field of `dataset` without touching the open report.
+/// `report` must hold the field as the user has it (including unsaved edits), and
+/// `report_path` (the `.dvz` file, or null when unsaved) sets the base for relative
+/// source paths. Returns `null` when the field is valid; otherwise an `invalid`
+/// error whose message names the field.
+#[tauri::command]
+pub async fn validate_calculated_field(
+    report: Report,
+    report_path: Option<String>,
+    dataset: String,
+    field: String,
+) -> Result<(), ApiError> {
+    blocking(move || {
+        let base = report_path
+            .as_deref()
+            .and_then(|p| Path::new(p).parent())
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        service::validate_calculated_field(&report, &base, &dataset, &field)
+    })
+    .await
+}
+
+/// Re-registers a dataset (with its current calculated fields) in the open engine,
+/// so previews and charts see the edits before the report is saved. Returns the
+/// dataset's refreshed columns.
+#[tauri::command]
+pub async fn register_calculated_fields(
+    state: Shared<'_>,
+    dataset: Dataset,
+) -> Result<Vec<ColumnView>, ApiError> {
+    let state = state.inner().clone();
+    blocking(move || {
+        let engine = state.lock_engine()?;
+        service::register_dataset_fields(&engine, &dataset)
     })
     .await
 }

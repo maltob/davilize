@@ -4,8 +4,11 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   AddedDataset,
   ApiError,
+  ColumnView,
+  Dataset,
   ExportSummary,
   OpenedReport,
+  Parameter,
   QueryTable,
   RenderedVisual,
   Report,
@@ -29,9 +32,17 @@ export const api = {
   previewDataset: (dataset: string, limit: number) =>
     invoke<QueryTable>("preview_dataset", { dataset, limit }),
   profileDataset: (dataset: string) => invoke<QueryTable>("profile_dataset", { dataset }),
-  renderVisual: (visual: Visual) => invoke<RenderedVisual>("render_visual", { visual }),
-  exportReport: (report: Report, format: string, dir: string) =>
-    invoke<ExportSummary>("export_report", { report, format, dir }),
+  /** `values` maps parameter names to the text the user entered; missing names use defaults. */
+  renderVisual: (visual: Visual, parameters: Parameter[], values: Record<string, string>) =>
+    invoke<RenderedVisual>("render_visual", { visual, parameters, values }),
+  exportReport: (report: Report, format: string, dir: string, values: Record<string, string>) =>
+    invoke<ExportSummary>("export_report", { report, format, dir, values }),
+  /** Resolves when the field is valid; rejects with an `invalid` error that names the field. */
+  validateCalculatedField: (report: Report, reportPath: string | null, dataset: string, field: string) =>
+    invoke<void>("validate_calculated_field", { report, reportPath, dataset, field }),
+  /** Re-registers a dataset's calculated fields in the open engine; returns its refreshed columns. */
+  registerCalculatedFields: (dataset: Dataset) =>
+    invoke<ColumnView[]>("register_calculated_fields", { dataset }),
   cancelQuery: () => invoke<void>("cancel_query"),
 };
 

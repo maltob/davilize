@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, toApiError } from "./api";
-import type { ApiError, RenderedVisual, Visual } from "./types";
-import { hasFields } from "./model";
+import type { ApiError, Parameter, RenderedVisual, Visual } from "./types";
+import { hasFields, requestValues } from "./model";
 
 export interface RenderState {
   loading: boolean;
@@ -12,21 +12,39 @@ export interface RenderState {
 const IDLE: RenderState = { loading: false, result: null, error: null };
 
 /**
- * Runs a visual through the backend whenever it changes. Results from older
- * requests are ignored, and `delay` debounces fast edits to the shelves.
+ * Runs a visual through the backend whenever it changes or a parameter value changes.
+ * Results from older requests are ignored, and `delay` debounces fast edits to the shelves.
+ * While `blocked` (a parameter value is invalid) nothing is sent; the reason is shown instead.
  */
-export function useRender(visual: Visual | null, delay: number): RenderState {
+export function useRender(
+  visual: Visual | null,
+  delay: number,
+  parameters: Parameter[],
+  values: Record<string, string>,
+  blocked: boolean,
+): RenderState {
   const [state, setState] = useState<RenderState>(IDLE);
+  const requested = requestValues(parameters, values);
+  const valuesKey = JSON.stringify(requested);
+  const parametersKey = JSON.stringify(parameters);
   useEffect(() => {
     if (!visual || !hasFields(visual)) {
       setState(IDLE);
+      return;
+    }
+    if (blocked) {
+      setState({
+        loading: false,
+        result: null,
+        error: { kind: "invalid", message: "Fix the parameter values above to run this visual." },
+      });
       return;
     }
     let current = true;
     setState((prev) => ({ ...prev, loading: true }));
     const timer = window.setTimeout(() => {
       api
-        .renderVisual(visual)
+        .renderVisual(visual, parameters, requested)
         .then((result) => {
           if (current) setState({ loading: false, result, error: null });
         })
@@ -38,7 +56,10 @@ export function useRender(visual: Visual | null, delay: number): RenderState {
       current = false;
       window.clearTimeout(timer);
     };
-  }, [visual, delay]);
+    // `requested` and `parameters` are represented by their JSON keys, which keeps
+    // the effect from re-running on every render when the objects are new but equal.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visual, delay, valuesKey, parametersKey, blocked]);
   return state;
 }
 

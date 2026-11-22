@@ -3,13 +3,13 @@
 //! Chart output comes from `dv-render`, the same code the CLI uses, so the GUI
 //! preview and an exported report agree.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use duckdb::arrow::array::Array;
 use duckdb::arrow::record_batch::RecordBatch;
 use duckdb::arrow::util::display::array_value_to_string;
-use dv_core::{Dataset, Report, Source, SourceKind, Visual};
+use dv_core::{Dataset, ParamValues, Parameter, Report, Source, SourceKind, Visual};
 use dv_engine::sql::quote_ident;
 use dv_engine::{ColumnInfo, Engine, OutputFormat, compile_visual, infer_format};
 use dv_render::Rendered;
@@ -31,6 +31,8 @@ pub struct ColumnView {
     pub family: &'static str,
     /// `measure` for numbers (summed by default), `dimension` otherwise.
     pub role: &'static str,
+    /// True for a column added by a calculated field.
+    pub calculated: bool,
 }
 
 /// A dataset (a view over a source) and its columns.
@@ -150,6 +152,7 @@ pub fn column_views(columns: Vec<ColumnInfo>) -> Vec<ColumnView> {
                 family,
                 name: c.name,
                 data_type: c.data_type,
+                calculated: c.calculated,
             }
         })
         .collect()
@@ -308,6 +311,95 @@ pub fn save_report(path: &Path, report: &Report) -> Result<Report, ApiError> {
 }
 
 // ---------------------------------------------------------------------------
+// Calculated fields
+// ---------------------------------------------------------------------------
+
+/// Checks one calculated field against the report's sources and the fields
+/// defined before it in its dataset. Runs on a scratch engine, so the open
+/// report is untouched. Errors come from the engine and name the field.
+pub fn validate_calculated_field(
+    report: &Report,
+    base_dir: &Path,
+    dataset: &str,
+    field: &str,
+) -> Result<(), ApiError> {
+    let target = report
+        .datasets
+        .iter()
+        .find(|d| d.name == dataset)
+        .ok_or_else(|| ApiError::invalid(format!("unknown dataset '{dataset}'")))?;
+    let position = target
+        .calculated_fields
+        .iter()
+        .position(|f| f.name == field)
+        .ok_or_else(|| {
+            ApiError::invalid(format!(
+                "calculated field '{field}' is not defined on dataset '{dataset}'"
+            ))
+        })?;
+
+    let engine = Engine::new()?;
+    // The dataset's own source must register, or its error is the useful one.
+    let own_source = report
+        .sources
+        .iter()
+        .find(|s| s.name == target.source)
+        .ok_or_else(|| {
+            ApiError::invalid(format!(
+                "dataset '{dataset}' references unknown source '{}'",
+                target.source
+            ))
+        })?;
+    engine.register_source(own_source, base_dir)?;
+    // Other sources and datasets are best effort: a dataset SQL may use them, and
+    // a broken one elsewhere must not hide this field's result.
+    for source in &report.sources {
+        if source.name != own_source.name {
+            let _ = engine.register_source(source, base_dir);
+        }
+    }
+    for other in &report.datasets {
+        if other.name != dataset {
+            let _ = engine.register_dataset(other);
+        }
+    }
+
+    // Only the fields up to and including this one, so later fields cannot affect it.
+    let mut scoped = target.clone();
+    scoped.calculated_fields.truncate(position + 1);
+    engine.register_dataset(&scoped)?;
+    Ok(())
+}
+
+/// Re-registers a dataset in the open engine after its calculated fields were
+/// edited, and returns its refreshed columns. The view is replaced only when
+/// every field checks, so a bad edit leaves the previous view in place.
+pub fn register_dataset_fields(
+    engine: &Engine,
+    dataset: &Dataset,
+) -> Result<Vec<ColumnView>, ApiError> {
+    engine.register_dataset(dataset)?;
+    Ok(column_views(engine.schema(&dataset.name)?))
+}
+
+// ---------------------------------------------------------------------------
+// Parameters
+// ---------------------------------------------------------------------------
+
+/// Parses the user's parameter text per declared type and fills in defaults.
+/// Bad or missing values come back as `invalid` errors that name the parameter.
+pub fn bind_params(
+    parameters: &[Parameter],
+    values: &BTreeMap<String, String>,
+) -> Result<ParamValues, ApiError> {
+    let supplied: Vec<(String, String)> = values
+        .iter()
+        .map(|(name, text)| (name.clone(), text.clone()))
+        .collect();
+    Ok(dv_core::resolve_parameters(parameters, &supplied)?)
+}
+
+// ---------------------------------------------------------------------------
 // Queries
 // ---------------------------------------------------------------------------
 
@@ -370,10 +462,17 @@ fn table_from_batches(
 }
 
 /// Compiles and runs one visual through the engine, then builds its Vega-Lite spec with `dv-render`.
-pub fn render_visual(engine: &Engine, visual: &Visual) -> Result<RenderedVisual, ApiError> {
-    let sql = compile_visual(visual)?;
+/// `values` are the user's parameter text; parameters without a value use their default.
+pub fn render_visual(
+    engine: &Engine,
+    visual: &Visual,
+    parameters: &[Parameter],
+    values: &BTreeMap<String, String>,
+) -> Result<RenderedVisual, ApiError> {
+    let bound = dv_core::bind_visual(visual, &bind_params(parameters, values)?)?;
+    let sql = compile_visual(&bound)?;
     let batches = engine.query(&sql)?;
-    let rendered = dv_render::prepare(visual, &batches)?;
+    let rendered = dv_render::prepare(&bound, &batches)?;
     Ok(RenderedVisual {
         id: rendered.id.clone(),
         title: rendered.title.clone(),
@@ -388,16 +487,25 @@ pub fn render_visual(engine: &Engine, visual: &Visual) -> Result<RenderedVisual,
 // Export
 // ---------------------------------------------------------------------------
 
-fn render_one(engine: &Engine, visual: &Visual) -> Result<Rendered, ApiError> {
-    let batches = engine.run_visual(visual)?;
-    Ok(dv_render::prepare(visual, &batches)?)
+fn render_one(
+    engine: &Engine,
+    visual: &Visual,
+    values: &ParamValues,
+) -> Result<Rendered, ApiError> {
+    let bound = dv_core::bind_visual(visual, values)?;
+    let batches = engine.run_visual(&bound)?;
+    Ok(dv_render::prepare(&bound, &batches)?)
 }
 
-fn render_all(engine: &Engine, report: &Report) -> Result<Vec<Rendered>, ApiError> {
+fn render_all(
+    engine: &Engine,
+    report: &Report,
+    values: &ParamValues,
+) -> Result<Vec<Rendered>, ApiError> {
     report
         .visuals
         .iter()
-        .map(|visual| render_one(engine, visual))
+        .map(|visual| render_one(engine, visual, values))
         .collect()
 }
 
@@ -413,14 +521,19 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ApiError> {
 /// * `xlsx`: one workbook, `<report>.xlsx`, with one sheet per visual.
 /// * `csv`: one file per visual, `<visual id>.csv`, holding the visual's query result.
 /// * `png` / `pdf`: one file per visual (native renderer, all chart types).
+///
+/// `values` are the user's parameter text, bound against `report.parameters` the same
+/// way as a preview. Parameters without a value use their default.
 pub fn export_report(
     engine: &Engine,
     report: &Report,
     format: ExportFormat,
     dir: &Path,
+    values: &BTreeMap<String, String>,
 ) -> Result<ExportSummary, ApiError> {
     // Visual ids become file names, so the report must pass validation first.
     report.validate()?;
+    let bound = bind_params(&report.parameters, values)?;
     std::fs::create_dir_all(dir)
         .map_err(|e| ApiError::new("io", format!("cannot create {}: {e}", dir.display())))?;
     let stem = output_stem(&report.name);
@@ -430,7 +543,7 @@ pub fn export_report(
     match format {
         ExportFormat::Csv => {
             for visual in &report.visuals {
-                let sql = compile_visual(visual)?;
+                let sql = compile_visual(&dv_core::bind_visual(visual, &bound)?)?;
                 let path = dir.join(format!("{}.csv", visual.id));
                 engine.export(&sql, &path, OutputFormat::Csv)?;
                 files.push(path.display().to_string());
@@ -443,7 +556,7 @@ pub fn export_report(
                 "pdf"
             };
             for visual in &report.visuals {
-                let rendered = render_one(engine, visual)?;
+                let rendered = render_one(engine, visual, &bound)?;
                 let svg = dv_render::svg::render(&rendered)?;
                 let bytes = if format == ExportFormat::Png {
                     dv_render::raster::png(&svg)?
@@ -456,14 +569,14 @@ pub fn export_report(
             }
         }
         ExportFormat::Html => {
-            let rendered = render_all(engine, report)?;
+            let rendered = render_all(engine, report, &bound)?;
             let page = dv_render::html_report(&report.name, &rendered, &Scripts::Cdn)?;
             let path = dir.join(format!("{stem}.html"));
             write_file(&path, page.as_bytes())?;
             files.push(path.display().to_string());
         }
         ExportFormat::Xlsx => {
-            let rendered = render_all(engine, report)?;
+            let rendered = render_all(engine, report, &bound)?;
             let bytes = dv_render::xlsx::workbook(&rendered)?;
             let path = dir.join(format!("{stem}.xlsx"));
             write_file(&path, &bytes)?;

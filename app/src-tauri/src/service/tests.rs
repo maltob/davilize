@@ -1,7 +1,12 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use dv_core::{Aggregate, ChartType, Encodings, Measure, Report, Visual};
+use dv_core::{
+    Aggregate, CalculatedField, ChartType, Encodings, Filter, FilterOp, FilterScope, Measure,
+    Parameter, Report, Visual,
+};
+use serde_json::json;
 
 use super::*;
 
@@ -192,7 +197,7 @@ fn profile_has_one_row_per_column() {
 fn render_visual_builds_spec_from_engine_result() {
     let dir = tempfile::tempdir().unwrap();
     let (engine, _) = engine_with_sales(dir.path());
-    let rendered = render_visual(&engine, &revenue_by_region()).unwrap();
+    let rendered = render_visual(&engine, &revenue_by_region(), &[], &BTreeMap::new()).unwrap();
     assert_eq!(rendered.spec["mark"]["type"], "bar");
     assert!(rendered.sql.contains("GROUP BY"));
     // North, South, West and the NULL region.
@@ -206,14 +211,14 @@ fn render_visual_reports_unknown_fields_as_invalid() {
     let (engine, _) = engine_with_sales(dir.path());
     let mut visual = revenue_by_region();
     visual.encodings.x = Some("nope".into());
-    let err = render_visual(&engine, &visual).unwrap_err();
+    let err = render_visual(&engine, &visual, &[], &BTreeMap::new()).unwrap_err();
     assert_eq!(err.kind, "invalid");
 }
 
 #[test]
 fn render_visual_reports_missing_dataset_as_query_error() {
     let engine = Engine::new().unwrap();
-    let err = render_visual(&engine, &revenue_by_region()).unwrap_err();
+    let err = render_visual(&engine, &revenue_by_region(), &[], &BTreeMap::new()).unwrap_err();
     assert_eq!(err.kind, "query");
 }
 
@@ -237,7 +242,8 @@ fn export_csv_writes_one_file_per_visual() {
     let (engine, added) = engine_with_sales(dir.path());
     let report = report_with(&added, revenue_by_region());
     let out = dir.path().join("out");
-    let summary = export_report(&engine, &report, ExportFormat::Csv, &out).unwrap();
+    let summary =
+        export_report(&engine, &report, ExportFormat::Csv, &out, &BTreeMap::new()).unwrap();
     assert_eq!(summary.files.len(), 1);
     let text = fs::read_to_string(out.join("revenue_by_region.csv")).unwrap();
     assert!(text.starts_with("region,sum_revenue"), "{text}");
@@ -250,13 +256,13 @@ fn export_html_and_xlsx_write_report_files() {
     let report = report_with(&added, revenue_by_region());
     let out = dir.path().join("out");
 
-    let html = export_report(&engine, &report, ExportFormat::Html, &out).unwrap();
+    let html = export_report(&engine, &report, ExportFormat::Html, &out, &BTreeMap::new()).unwrap();
     assert_eq!(html.files.len(), 1);
     let page = fs::read_to_string(out.join("Sample_sales.html")).unwrap();
     assert!(page.contains("<h2>Revenue by region</h2>"));
     assert!(page.contains("vega-embed"));
 
-    export_report(&engine, &report, ExportFormat::Xlsx, &out).unwrap();
+    export_report(&engine, &report, ExportFormat::Xlsx, &out, &BTreeMap::new()).unwrap();
     let book = fs::read(out.join("Sample_sales.xlsx")).unwrap();
     assert!(book.starts_with(b"PK"), "xlsx is a zip container");
 }
@@ -271,14 +277,16 @@ fn export_png_writes_bar_and_table_charts() {
     let report = report_with(&added, revenue_by_region());
     let out = dir.path().join("png");
 
-    let summary = export_report(&engine, &report, ExportFormat::Png, &out).unwrap();
+    let summary =
+        export_report(&engine, &report, ExportFormat::Png, &out, &BTreeMap::new()).unwrap();
     assert!(summary.warnings.is_empty());
     let image = fs::read(out.join("revenue_by_region.png")).unwrap();
     assert!(image.starts_with(&[0x89, b'P', b'N', b'G']));
 
     let mut report = report_with(&added, table);
     report.visuals[0].id = "as_table".into();
-    let summary = export_report(&engine, &report, ExportFormat::Png, &out).unwrap();
+    let summary =
+        export_report(&engine, &report, ExportFormat::Png, &out, &BTreeMap::new()).unwrap();
     assert!(summary.warnings.is_empty(), "{:?}", summary.warnings);
     let image = fs::read(out.join("as_table.png")).unwrap();
     assert!(image.starts_with(&[0x89, b'P', b'N', b'G']));
@@ -291,8 +299,14 @@ fn export_rejects_ids_that_are_not_safe_file_names() {
     let mut visual = revenue_by_region();
     visual.id = "../escape".into();
     let report = report_with(&added, visual);
-    let err =
-        export_report(&engine, &report, ExportFormat::Csv, &dir.path().join("out")).unwrap_err();
+    let err = export_report(
+        &engine,
+        &report,
+        ExportFormat::Csv,
+        &dir.path().join("out"),
+        &BTreeMap::new(),
+    )
+    .unwrap_err();
     assert_eq!(err.kind, "invalid");
     assert!(!dir.path().join("escape.csv").exists());
 }
@@ -318,7 +332,8 @@ fn save_stores_source_paths_relative_to_the_report_and_reopens() {
     assert_eq!(opened.datasets[0].name, "sales");
     let table = preview(&engine, "sales", 3).unwrap();
     assert_eq!(table.rows.len(), 3);
-    let rendered = render_visual(&engine, &opened.report.visuals[0]).unwrap();
+    let rendered =
+        render_visual(&engine, &opened.report.visuals[0], &[], &BTreeMap::new()).unwrap();
     assert_eq!(rendered.row_count, 4);
 }
 
@@ -337,7 +352,8 @@ fn save_as_into_another_folder_keeps_sources_reachable() {
     save_report(&second, &opened.report).unwrap();
 
     let (engine, reopened) = open_report(&second).unwrap();
-    let rendered = render_visual(&engine, &reopened.report.visuals[0]).unwrap();
+    let rendered =
+        render_visual(&engine, &reopened.report.visuals[0], &[], &BTreeMap::new()).unwrap();
     assert_eq!(rendered.row_count, 4);
 }
 
@@ -349,4 +365,308 @@ fn save_rejects_invalid_reports() {
     let err = save_report(&dir.path().join("bad.dvz"), &report).unwrap_err();
     assert_eq!(err.kind, "invalid");
     assert!(!dir.path().join("bad.dvz").exists());
+}
+
+// ---------------------------------------------------------------------------
+// Parameters
+// ---------------------------------------------------------------------------
+
+fn values(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+/// revenue_by_region, keeping rows where `units >= {param: min_units}`.
+fn revenue_from_min_units() -> Visual {
+    let mut visual = revenue_by_region();
+    visual.filters.push(Filter {
+        field: "units".into(),
+        op: FilterOp::Ge,
+        values: vec![json!({"param": "min_units"})],
+        scope: FilterScope::Row,
+    });
+    visual
+}
+
+fn min_units_parameter() -> Vec<Parameter> {
+    vec![Parameter::new("min_units", Some(json!(1)))]
+}
+
+#[test]
+fn render_uses_parameter_default_when_no_value_is_given() {
+    let dir = tempfile::tempdir().unwrap();
+    let (engine, _) = engine_with_sales(dir.path());
+    let rendered = render_visual(
+        &engine,
+        &revenue_from_min_units(),
+        &min_units_parameter(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    // Default 1 keeps every row: North, South, West and the NULL region.
+    assert_eq!(rendered.row_count, 4);
+}
+
+#[test]
+fn render_applies_a_parameter_value_override() {
+    let dir = tempfile::tempdir().unwrap();
+    let (engine, _) = engine_with_sales(dir.path());
+    let rendered = render_visual(
+        &engine,
+        &revenue_from_min_units(),
+        &min_units_parameter(),
+        &values(&[("min_units", "5")]),
+    )
+    .unwrap();
+    // Only the West order has 5 or more units.
+    assert_eq!(rendered.row_count, 1);
+    assert!(rendered.sql.contains(">= 5"), "{}", rendered.sql);
+}
+
+#[test]
+fn render_rejects_a_bad_parameter_value_and_names_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let (engine, _) = engine_with_sales(dir.path());
+    let err = render_visual(
+        &engine,
+        &revenue_from_min_units(),
+        &min_units_parameter(),
+        &values(&[("min_units", "lots")]),
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, "invalid");
+    assert!(err.message.contains("min_units"), "{}", err.message);
+}
+
+#[test]
+fn render_rejects_a_missing_required_parameter() {
+    let dir = tempfile::tempdir().unwrap();
+    let (engine, _) = engine_with_sales(dir.path());
+    let mut visual = revenue_by_region();
+    visual.filters.push(Filter {
+        field: "region".into(),
+        op: FilterOp::Eq,
+        values: vec![json!({"param": "region"})],
+        scope: FilterScope::Row,
+    });
+    // No default, so the value is required.
+    let parameters = vec![Parameter::new("region", None)];
+    let err = render_visual(&engine, &visual, &parameters, &BTreeMap::new()).unwrap_err();
+    assert_eq!(err.kind, "invalid");
+    assert!(err.message.contains("region"), "{}", err.message);
+
+    let rendered = render_visual(
+        &engine,
+        &visual,
+        &parameters,
+        &values(&[("region", "North")]),
+    )
+    .unwrap();
+    assert_eq!(rendered.row_count, 1);
+}
+
+#[test]
+fn export_binds_parameters_like_a_preview() {
+    let dir = tempfile::tempdir().unwrap();
+    let (engine, added) = engine_with_sales(dir.path());
+    let mut report = report_with(&added, revenue_from_min_units());
+    report.parameters = min_units_parameter();
+    let out = dir.path().join("out");
+
+    export_report(
+        &engine,
+        &report,
+        ExportFormat::Csv,
+        &out,
+        &values(&[("min_units", "5")]),
+    )
+    .unwrap();
+    let text = fs::read_to_string(out.join("revenue_by_region.csv")).unwrap();
+    assert_eq!(
+        text.lines().count(),
+        2,
+        "header and the West row only: {text}"
+    );
+
+    let err = export_report(
+        &engine,
+        &report,
+        ExportFormat::Csv,
+        &out,
+        &values(&[("min_units", "1.5")]),
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, "invalid");
+    assert!(err.message.contains("min_units"), "{}", err.message);
+}
+
+#[test]
+fn unknown_parameter_value_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let (engine, _) = engine_with_sales(dir.path());
+    let err = render_visual(
+        &engine,
+        &revenue_from_min_units(),
+        &min_units_parameter(),
+        &values(&[("nope", "1")]),
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, "invalid");
+    assert!(err.message.contains("nope"), "{}", err.message);
+}
+
+// ---------------------------------------------------------------------------
+// Calculated fields
+// ---------------------------------------------------------------------------
+
+fn field(name: &str, expression: &str) -> CalculatedField {
+    CalculatedField {
+        name: name.into(),
+        expression: expression.into(),
+        description: None,
+    }
+}
+
+/// The sample's two chained fields on the sales dataset.
+fn sample_fields() -> Vec<CalculatedField> {
+    vec![
+        field("net_revenue", "revenue * 0.9"),
+        field(
+            "big_ticket",
+            "CASE WHEN net_revenue >= 100 THEN 'yes' ELSE 'no' END",
+        ),
+    ]
+}
+
+fn report_with_fields(added: &AddedDataset, fields: Vec<CalculatedField>) -> Report {
+    let mut report = report_with(added, revenue_by_region());
+    report.datasets[0].calculated_fields = fields;
+    report
+}
+
+#[test]
+fn calculated_fields_accept_sample_expressions() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_engine, added) = engine_with_sales(dir.path());
+    let report = report_with_fields(&added, sample_fields());
+    for name in ["net_revenue", "big_ticket"] {
+        validate_calculated_field(&report, dir.path(), "sales", name)
+            .unwrap_or_else(|e| panic!("{name}: {}", e.message));
+    }
+}
+
+#[test]
+fn calculated_fields_reject_subqueries_and_forbidden_functions() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_engine, added) = engine_with_sales(dir.path());
+
+    let subquery = report_with_fields(&added, vec![field("bad_sub", "(SELECT 1)")]);
+    let err = validate_calculated_field(&subquery, dir.path(), "sales", "bad_sub").unwrap_err();
+    assert_eq!(err.kind, "invalid");
+    assert!(err.message.contains("bad_sub"), "{}", err.message);
+
+    let forbidden = report_with_fields(&added, vec![field("bad_fn", "repeat('x', 3)")]);
+    let err = validate_calculated_field(&forbidden, dir.path(), "sales", "bad_fn").unwrap_err();
+    assert_eq!(err.kind, "invalid");
+    assert!(err.message.contains("bad_fn"), "{}", err.message);
+}
+
+#[test]
+fn calculated_fields_are_checked_in_declaration_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_engine, added) = engine_with_sales(dir.path());
+    // `big_ticket` uses `net_revenue`, which is defined after it here.
+    let fields = vec![
+        field(
+            "big_ticket",
+            "CASE WHEN net_revenue >= 100 THEN 'yes' ELSE 'no' END",
+        ),
+        field("net_revenue", "revenue * 0.9"),
+    ];
+    let report = report_with_fields(&added, fields);
+    let err = validate_calculated_field(&report, dir.path(), "sales", "big_ticket").unwrap_err();
+    assert!(err.message.contains("big_ticket"), "{}", err.message);
+    // Fields are layered in order, so a later field is checked after the broken one
+    // before it, and the error names that earlier field.
+    let err = validate_calculated_field(&report, dir.path(), "sales", "net_revenue").unwrap_err();
+    assert!(err.message.contains("big_ticket"), "{}", err.message);
+    let fixed = report_with_fields(
+        &added,
+        vec![
+            field("net_revenue", "revenue * 0.9"),
+            field("big_ticket", "net_revenue > 100"),
+        ],
+    );
+    validate_calculated_field(&fixed, dir.path(), "sales", "big_ticket").unwrap();
+}
+
+#[test]
+fn validating_an_unknown_field_or_dataset_is_invalid() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_engine, added) = engine_with_sales(dir.path());
+    let report = report_with_fields(&added, sample_fields());
+    let err = validate_calculated_field(&report, dir.path(), "sales", "missing").unwrap_err();
+    assert_eq!(err.kind, "invalid");
+    let err = validate_calculated_field(&report, dir.path(), "nope", "net_revenue").unwrap_err();
+    assert_eq!(err.kind, "invalid");
+}
+
+#[test]
+fn dataset_with_calculated_fields_reregisters_and_exposes_new_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let (engine, added) = engine_with_sales(dir.path());
+
+    let mut dataset = added.dataset.clone();
+    dataset.calculated_fields = vec![field("net_revenue", "revenue * 0.9")];
+    let columns = register_dataset_fields(&engine, &dataset).unwrap();
+    let net = columns.iter().find(|c| c.name == "net_revenue").unwrap();
+    assert!(net.calculated);
+    assert_eq!(net.role, "measure");
+    let revenue = columns.iter().find(|c| c.name == "revenue").unwrap();
+    assert!(!revenue.calculated);
+
+    // A chained field is added on top; the earlier one stays.
+    dataset.calculated_fields = sample_fields();
+    let columns = register_dataset_fields(&engine, &dataset).unwrap();
+    assert!(
+        columns
+            .iter()
+            .any(|c| c.name == "big_ticket" && c.calculated)
+    );
+    assert!(
+        columns
+            .iter()
+            .any(|c| c.name == "net_revenue" && c.calculated)
+    );
+    let table = preview(&engine, "sales", 5).unwrap();
+    assert!(table.columns.iter().any(|c| c.name == "big_ticket"));
+
+    // A bad edit is refused and the previous view keeps working.
+    dataset
+        .calculated_fields
+        .push(field("broken", "(SELECT 1)"));
+    let err = register_dataset_fields(&engine, &dataset).unwrap_err();
+    assert_eq!(err.kind, "invalid");
+    assert!(err.message.contains("broken"), "{}", err.message);
+    let table = preview(&engine, "sales", 5).unwrap();
+    assert!(table.columns.iter().any(|c| c.name == "big_ticket"));
+    assert!(!table.columns.iter().any(|c| c.name == "broken"));
+}
+
+#[test]
+fn column_views_carry_the_calculated_flag() {
+    let dir = tempfile::tempdir().unwrap();
+    let (engine, added) = engine_with_sales(dir.path());
+    let mut dataset = added.dataset.clone();
+    dataset.calculated_fields = vec![field("net_revenue", "revenue * 0.9")];
+    register_dataset_fields(&engine, &dataset).unwrap();
+    let columns = column_views(engine.schema("sales").unwrap());
+    assert_eq!(columns.iter().filter(|c| c.calculated).count(), 1);
+    assert!(
+        columns
+            .iter()
+            .any(|c| c.name == "net_revenue" && c.calculated)
+    );
 }

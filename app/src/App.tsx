@@ -3,21 +3,29 @@ import { api, pickDataFiles, pickFolder, pickReportToOpen, pickReportToSave, toA
 import { ChartView } from "./components/ChartView";
 import { DataGrid } from "./components/DataGrid";
 import { DataPanel, type FieldTarget } from "./components/DataPanel";
+import { ParameterValuesBar } from "./components/Parameters";
 import { Shelves } from "./components/Shelves";
 import { useDatasetTable, useRender } from "./hooks";
 import {
   applySlots,
   autoTitle,
   blankVisual,
+  datasetOf,
   emptySlots,
   hasFields,
   newVisualId,
+  parameterIssues,
   pillFor,
+  requestValues,
   slotsFromVisual,
+  withCalculatedField,
+  withoutCalculatedField,
+  withoutParameter,
+  withParameter,
   type Pill,
   type Slot,
 } from "./model";
-import type { ApiError, ColumnView, Report, Visual } from "./types";
+import type { ApiError, CalculatedField, ColumnView, Parameter, Report, Visual } from "./types";
 
 const EXPORT_FORMATS = [
   { value: "html", label: "HTML page" },
@@ -51,10 +59,14 @@ export default function App() {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [exportFormat, setExportFormat] = useState("html");
+  // Runtime values for the report's parameters. They are not saved in the .dvz.
+  const [paramValues, setParamValues] = useState<Record<string, string>>({});
 
   const columns = useMemo(() => (draft ? schemas[draft.dataset] ?? [] : []), [draft, schemas]);
   const slots = useMemo(() => (draft ? slotsFromVisual(draft) : emptySlots()), [draft]);
-  const render = useRender(draft, 250);
+  const paramIssues = useMemo(() => parameterIssues(report.parameters, paramValues), [report.parameters, paramValues]);
+  const paramsBlocked = Object.keys(paramIssues).length > 0;
+  const render = useRender(draft, 250, report.parameters, paramValues, paramsBlocked);
   const table = useDatasetTable(activeDataset, bottomTab);
 
   const savedVisual = draft ? report.visuals.find((v) => v.id === draft.id) : undefined;
@@ -130,6 +142,52 @@ export default function App() {
     setView("builder");
   }
 
+  /**
+   * Re-registers the edited dataset in the engine, then applies the change to the
+   * report. A refused change (for example a bad expression) leaves everything as it was.
+   */
+  async function applyCalculated(dataset: string, candidate: Report): Promise<string | null> {
+    const next = datasetOf(candidate, dataset);
+    if (!next) return `Unknown dataset "${dataset}".`;
+    try {
+      const refreshed = await api.registerCalculatedFields(next);
+      setReport(candidate);
+      setSchemas((current) => ({ ...current, [dataset]: refreshed }));
+      setReportDirty(true);
+      return null;
+    } catch (err) {
+      return toApiError(err).message;
+    }
+  }
+
+  function saveCalculatedField(dataset: string, field: CalculatedField, original: string | null) {
+    return applyCalculated(dataset, withCalculatedField(report, dataset, field, original));
+  }
+
+  function deleteCalculatedField(dataset: string, name: string) {
+    return applyCalculated(dataset, withoutCalculatedField(report, dataset, name));
+  }
+
+  function saveParameter(param: Parameter, original: string | null) {
+    setReport((current) => withParameter(current, param, original));
+    setParamValues((current) => {
+      const next = { ...current };
+      if (original !== null) delete next[original];
+      return next;
+    });
+    setReportDirty(true);
+  }
+
+  function deleteParameter(name: string) {
+    setReport((current) => withoutParameter(current, name));
+    setParamValues((current) => {
+      const next = { ...current };
+      delete next[name];
+      return next;
+    });
+    setReportDirty(true);
+  }
+
   async function addFiles() {
     const paths = await pickDataFiles();
     if (!paths || paths.length === 0) return;
@@ -159,6 +217,7 @@ export default function App() {
       setReport(opened.report);
       setReportPath(opened.path);
       setReportDirty(false);
+      setParamValues({});
       setSchemas(Object.fromEntries(opened.datasets.map((d) => [d.name, d.columns])));
       const first = opened.report.visuals[0];
       const dataset = first?.dataset ?? opened.report.datasets[0]?.name ?? null;
@@ -190,7 +249,7 @@ export default function App() {
     const dir = await pickFolder();
     if (!dir) return;
     await run("Exporting", async () => {
-      const summary = await api.exportReport(report, exportFormat, dir);
+      const summary = await api.exportReport(report, exportFormat, dir, requestValues(report.parameters, paramValues));
       const warnings = summary.warnings.length ? ` Skipped: ${summary.warnings.join("; ")}` : "";
       setNotice({
         tone: "info",
@@ -247,7 +306,13 @@ export default function App() {
               </option>
             ))}
           </select>
-          <button type="button" className={primary} onClick={exportReport} disabled={busy !== null || report.visuals.length === 0}>
+          <button
+            type="button"
+            className={primary}
+            onClick={exportReport}
+            disabled={busy !== null || report.visuals.length === 0 || paramsBlocked}
+            title={paramsBlocked ? "Fix the parameter values to export" : undefined}
+          >
             Export...
           </button>
         </div>
@@ -277,6 +342,8 @@ export default function App() {
       <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[18rem_1fr]">
         <aside aria-label="Data panel" className="min-h-0 overflow-hidden border-b border-border bg-surface md:border-b-0 md:border-r">
           <DataPanel
+            report={report}
+            reportPath={reportPath}
             datasets={report.datasets}
             sources={report.sources}
             schemas={schemas}
@@ -285,10 +352,23 @@ export default function App() {
             onSelect={selectDataset}
             onAddFiles={addFiles}
             onAddField={addField}
+            onSaveCalculated={saveCalculatedField}
+            onDeleteCalculated={deleteCalculatedField}
+            onSaveParameter={saveParameter}
+            onDeleteParameter={deleteParameter}
           />
         </aside>
 
         <main className="flex min-h-0 min-w-0 flex-col">
+          {report.parameters.length > 0 && (
+            <ParameterValuesBar
+              parameters={report.parameters}
+              values={paramValues}
+              issues={paramIssues}
+              onChange={(name, text) => setParamValues((current) => ({ ...current, [name]: text }))}
+              onReset={() => setParamValues({})}
+            />
+          )}
           <div role="tablist" aria-label="Views" className="flex gap-1 border-b border-border px-3 pt-2">
             {(["builder", "report"] as const).map((name) => (
               <button
@@ -365,6 +445,7 @@ export default function App() {
                     visual={draft}
                     slots={slots}
                     columns={columns}
+                    parameters={report.parameters}
                     onSlot={setSlot}
                     onFieldDrop={addField}
                     onChange={(patch) => updateDraft((v) => ({ ...v, ...patch }))}
@@ -446,7 +527,13 @@ export default function App() {
               )}
             </div>
           ) : (
-            <ReportView visuals={report.visuals} onOpen={openVisual} />
+            <ReportView
+              visuals={report.visuals}
+              parameters={report.parameters}
+              values={paramValues}
+              blocked={paramsBlocked}
+              onOpen={openVisual}
+            />
           )}
         </main>
       </div>
@@ -472,21 +559,52 @@ function EmptyState({ hasData, onAddFiles }: { hasData: boolean; onAddFiles: () 
   );
 }
 
-function ReportView({ visuals, onOpen }: { visuals: Visual[]; onOpen: (visual: Visual) => void }) {
+function ReportView({
+  visuals,
+  parameters,
+  values,
+  blocked,
+  onOpen,
+}: {
+  visuals: Visual[];
+  parameters: Parameter[];
+  values: Record<string, string>;
+  blocked: boolean;
+  onOpen: (visual: Visual) => void;
+}) {
   if (visuals.length === 0) {
     return <p className="p-6 text-sm text-muted">The report has no visuals yet. Build one in the chart builder and add it to the report.</p>;
   }
   return (
     <div className="grid grid-cols-1 gap-3 overflow-y-auto p-3 xl:grid-cols-2">
       {visuals.map((visual) => (
-        <VisualCard key={visual.id} visual={visual} onOpen={() => onOpen(visual)} />
+        <VisualCard
+          key={visual.id}
+          visual={visual}
+          parameters={parameters}
+          values={values}
+          blocked={blocked}
+          onOpen={() => onOpen(visual)}
+        />
       ))}
     </div>
   );
 }
 
-function VisualCard({ visual, onOpen }: { visual: Visual; onOpen: () => void }) {
-  const state = useRender(visual, 0);
+function VisualCard({
+  visual,
+  parameters,
+  values,
+  blocked,
+  onOpen,
+}: {
+  visual: Visual;
+  parameters: Parameter[];
+  values: Record<string, string>;
+  blocked: boolean;
+  onOpen: () => void;
+}) {
+  const state = useRender(visual, 0, parameters, values, blocked);
   return (
     <article aria-label={visual.title || visual.id} className="flex min-w-0 flex-col gap-2 rounded-md border border-border bg-surface p-3">
       <div className="flex items-center justify-between gap-2">
