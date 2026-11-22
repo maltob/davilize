@@ -3,8 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use dv_core::{
-    Aggregate, CalculatedField, ChartType, Encodings, Filter, FilterOp, FilterScope, Measure,
-    Parameter, Report, Visual,
+    Aggregate, CalculatedField, ChartType, Dashboard, DashboardItem, Encodings, Filter, FilterOp,
+    FilterScope, Measure, Parameter, Report, Visual,
 };
 use serde_json::json;
 
@@ -669,4 +669,139 @@ fn column_views_carry_the_calculated_flag() {
             .iter()
             .any(|c| c.name == "net_revenue" && c.calculated)
     );
+}
+
+fn row_filter(field: &str, op: FilterOp, values: Vec<serde_json::Value>) -> Filter {
+    Filter {
+        field: field.into(),
+        op,
+        values,
+        scope: FilterScope::Row,
+    }
+}
+
+#[test]
+fn dashboard_filter_changes_numbers_only_where_the_column_exists() {
+    let dir = tempfile::tempdir().unwrap();
+    let (engine, added) = engine_with_sales(dir.path());
+    let report = report_with(&added, revenue_by_region());
+    let visual = &report.visuals[0];
+    let none = BTreeMap::new();
+
+    let all = render_dashboard_visual(&engine, visual, &[], &[], &none).unwrap();
+    assert!(all.row_count > 1, "one row per region: {}", all.row_count);
+
+    let north = render_dashboard_visual(
+        &engine,
+        visual,
+        &[row_filter("region", FilterOp::Eq, vec![json!("North")])],
+        &[],
+        &none,
+    )
+    .unwrap();
+    assert_eq!(north.row_count, 1, "only North is left");
+
+    // The dataset has no such column, so the shared filter is skipped.
+    let skipped = render_dashboard_visual(
+        &engine,
+        visual,
+        &[row_filter(
+            "no_such_column",
+            FilterOp::Eq,
+            vec![json!("Nowhere")],
+        )],
+        &[],
+        &none,
+    )
+    .unwrap();
+    assert_eq!(skipped.row_count, all.row_count);
+}
+
+#[test]
+fn dashboard_filter_binds_parameter_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let (engine, added) = engine_with_sales(dir.path());
+    let report = report_with(&added, revenue_by_region());
+    let params = vec![Parameter::new("region", Some(json!("North")))];
+    let filter = row_filter("region", FilterOp::Eq, vec![json!({"param": "region"})]);
+
+    let default = render_dashboard_visual(
+        &engine,
+        &report.visuals[0],
+        std::slice::from_ref(&filter),
+        &params,
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(default.row_count, 1, "the default value is North");
+
+    let south = render_dashboard_visual(
+        &engine,
+        &report.visuals[0],
+        std::slice::from_ref(&filter),
+        &params,
+        &values(&[("region", "South")]),
+    )
+    .unwrap();
+    assert_eq!(south.row_count, 1);
+    assert!(south.sql.contains("'South'"), "{}", south.sql);
+}
+
+#[test]
+fn html_export_with_dashboards_draws_the_grid_and_applies_filters() {
+    let dir = tempfile::tempdir().unwrap();
+    let (engine, added) = engine_with_sales(dir.path());
+    let mut report = report_with(&added, revenue_by_region());
+    report.parameters = vec![Parameter::new("region", Some(json!("North")))];
+    let mut dashboard = Dashboard::new("overview", "Overview");
+    dashboard.columns = 6;
+    dashboard.row_height = 40;
+    dashboard.items = vec![DashboardItem {
+        visual: "revenue_by_region".into(),
+        x: 0,
+        y: 0,
+        w: 3,
+        h: 2,
+    }];
+    dashboard.filters = vec![row_filter(
+        "region",
+        FilterOp::Eq,
+        vec![json!({"param": "region"})],
+    )];
+    report.dashboards = vec![dashboard];
+    let out = dir.path().join("out");
+
+    export_report(
+        &engine,
+        &report,
+        ExportFormat::Html,
+        &out,
+        &values(&[("region", "South")]),
+    )
+    .unwrap();
+    let page = fs::read_to_string(out.join("Sample_sales.html")).unwrap();
+    assert!(page.contains("repeat(6, 1fr)"), "columns in the grid");
+    assert!(
+        page.contains("grid-auto-rows: 40px"),
+        "row height in the grid"
+    );
+    assert!(
+        page.contains("grid-column: 1 / span 3; grid-row: 1 / span 2"),
+        "placement"
+    );
+    assert!(
+        page.contains("South"),
+        "the parameter value filters the chart data"
+    );
+    assert!(
+        !page.contains("North"),
+        "the default is not used when a value is given"
+    );
+
+    // A report without dashboards keeps the plain page.
+    report.dashboards.clear();
+    export_report(&engine, &report, ExportFormat::Html, &out, &BTreeMap::new()).unwrap();
+    let plain = fs::read_to_string(out.join("Sample_sales.html")).unwrap();
+    assert!(!plain.contains("dash-grid"));
+    assert!(plain.contains("<h2>Revenue by region</h2>"));
 }

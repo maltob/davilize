@@ -11,7 +11,8 @@ Reports never contain secrets. A database source holds only a connection referen
   "sources":    [ ... ],
   "datasets":   [ ... ],
   "visuals":    [ ... ],
-  "parameters": [ ... ]
+  "parameters": [ ... ],
+  "dashboards": [ ... ]
 }
 ```
 
@@ -102,6 +103,46 @@ The allowlist lives in `crates/dv-engine/src/calc.rs`. Change this document and 
 - Every `{"param": ...}` reference must name a declared parameter, or the report is invalid.
 
 Values come from `--param NAME=VALUE` (repeatable) or the default. Each value is parsed and checked against the type and constraints. A bad value stops the run with exit code 3 and writes nothing.
+
+## Dashboards
+
+A dashboard places visuals on a grid and shares filters among them. A report without dashboards is unchanged.
+
+```json
+{
+  "id": "overview", "title": "Overview", "columns": 12, "row_height": 80,
+  "items": [
+    { "visual": "revenue_by_region", "x": 0, "y": 0, "w": 6, "h": 4 },
+    { "visual": "product_revenue", "x": 6, "y": 0, "w": 6, "h": 4 }
+  ],
+  "filters": [ { "field": "region", "op": "eq", "values": [ { "param": "region" } ] } ]
+}
+```
+
+- `id`: unique among dashboards, same name rules as visual ids. `title` is shown above the grid.
+- `columns`: 1 to 24, default 12. `row_height`: the height of one grid row in pixels, 20 to 400, default 80.
+- `items`: each has `visual` (the id of a visual in the report), and `x`, `y` (0-based grid position, default 0), `w` and `h` (size in grid units, at least 1). Each visual appears at most once per dashboard. An item must fit inside `columns` (`x + w <= columns`), and items must not overlap.
+- `filters`: shared filters, written like visual filters but row scope only (see below). Optional; omitted when empty.
+
+A report's `dashboards` array is omitted when empty, so reports written before dashboards existed serialise unchanged. Validation failures (unknown or duplicate ids, a visual placed twice or outside the grid, overlapping items, grid sizes out of range, an aggregate-scope or malformed shared filter, an undeclared parameter) make the report invalid, which is exit code 3.
+
+### Shared filter semantics
+
+A dashboard filter applies to every visual on that dashboard whose dataset has a column named `field` (matched exactly). A visual whose dataset lacks that column is shown without the filter. A shared filter is added after the visual's own filters, and `{"param": ...}` values are bound with the report's parameters. Parameters stay global: one `--param region=North` applies to every dashboard.
+
+A visual placed on two dashboards is rendered once per placement, each with that dashboard's filters, so the two charts can show different numbers.
+
+### Layout and other formats
+
+- `refresh --format html` (and `publish` and `serve --refresh`, which write HTML) draws one section per dashboard. Each section has a heading and a CSS grid, with `grid-template-columns: repeat(columns, 1fr)` and `grid-auto-rows: <row_height>px`. Each chart sits in its cell, with its title, and resizes with the cell. At 700px wide or less, the grid becomes one column with the cells stacked top to bottom, then left to right.
+- When a report has dashboards, the HTML page shows only the dashboards. Visuals that are on no dashboard are not shown.
+- The other formats do not use dashboards. `csv`, `parquet`, `svg`, `png`, `pdf` and `xlsx` are written per visual, without dashboard filters or grid, exactly as for a report with no dashboards.
+
+`examples/sample_dashboard.dvz` has two dashboards, a shared `region` parameter filter, and one visual on both dashboards:
+
+```
+davilize refresh examples/sample_dashboard.dvz --out out --format html --param region=South
+```
 
 ## CLI
 

@@ -104,6 +104,31 @@ export interface Report {
   datasets: Dataset[];
   visuals: Visual[];
   parameters: Parameter[];
+  /** Omitted when empty. */
+  dashboards?: Dashboard[];
+}
+
+/** A visual placed on a dashboard grid. `x` and `y` are 0-based grid units; `w` and `h` are at least 1. */
+export interface DashboardItem {
+  visual: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * A dashboard: visuals on a grid, plus row filters shared by its visuals. A filter
+ * applies to every visual whose dataset has its field (see docs/reports.md).
+ */
+export interface Dashboard {
+  id: string;
+  title: string;
+  columns: number;
+  row_height: number;
+  items: DashboardItem[];
+  /** Omitted when empty. */
+  filters?: Filter[];
 }
 
 export interface ColumnView {

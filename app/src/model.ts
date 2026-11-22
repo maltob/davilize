@@ -4,6 +4,7 @@ import type {
   Aggregate,
   CalculatedField,
   ColumnView,
+  Dashboard,
   Dataset,
   Family,
   Filter,
@@ -17,6 +18,7 @@ import type {
   Report,
   Visual,
 } from "./types";
+import { GRID_LIMITS } from "./layout";
 
 export type Slot = "x" | "y" | "color" | "size";
 export type PillAgg = Aggregate | "raw";
@@ -215,14 +217,14 @@ export function withScope(filter: Filter, scope: FilterScope): Filter {
 }
 
 /** Names a filter can use: dataset columns for row filters, measure outputs for totals. */
-export function filterFieldOptions(scope: FilterScope, visual: Visual, columns: ColumnView[]): string[] {
-  if (scope === "aggregate") return [...new Set(visual.measures.map(outputName))];
+export function filterFieldOptions(scope: FilterScope, visual: Visual | undefined, columns: ColumnView[]): string[] {
+  if (scope === "aggregate" && visual) return [...new Set(visual.measures.map(outputName))];
   return columns.map((c) => c.name);
 }
 
 /** The type family used to read typed values. A total takes the type of its measure. */
-export function filterFamily(filter: Filter, visual: Visual, columns: ColumnView[]): Family | undefined {
-  if (filterScope(filter) === "row") return familyOf(columns, filter.field);
+export function filterFamily(filter: Filter, visual: Visual | undefined, columns: ColumnView[]): Family | undefined {
+  if (filterScope(filter) === "row" || !visual) return familyOf(columns, filter.field);
   const measure = visual.measures.find((m) => outputName(m) === filter.field);
   if (!measure) return undefined;
   if (measure.agg === "count" || measure.agg === "count_distinct" || measure.agg === "sum" || measure.agg === "avg") {
@@ -402,20 +404,29 @@ export function parameterIssues(parameters: Parameter[], values: Record<string, 
   return issues;
 }
 
-/** Titles of visuals whose filters or row limit refer to a parameter. */
+
+
+/** Titles of visuals and dashboards whose filters or row limit refer to a parameter. */
 export function parameterUsers(report: Report, name: string): string[] {
-  return report.visuals
+  const visuals = report.visuals
     .filter(
       (v) =>
         (isParamRef(v.limit) && v.limit.param === name) ||
         v.filters.some((f) => f.values.some((x) => isParamRef(x) && x.param === name)),
     )
     .map((v) => v.title || v.id);
+  const dashboards = (report.dashboards ?? [])
+    .filter((d) => (d.filters ?? []).some((f) => f.values.some((x) => isParamRef(x) && x.param === name)))
+    .map((d) => `${d.title || d.id} (shared filter)`);
+  return [...visuals, ...dashboards];
 }
 
-/** Titles of visuals on `dataset` that use a field as a dimension, measure, encoding, filter or sort key. */
+/**
+ * Titles of visuals on `dataset` that use a field as a dimension, measure, encoding, filter or sort key,
+ * and of dashboards with a shared filter on it that reaches one of those visuals.
+ */
 export function fieldUsers(report: Report, dataset: string, field: string): string[] {
-  return report.visuals
+  const visuals = report.visuals
     .filter(
       (v) =>
         v.dataset === dataset &&
@@ -426,6 +437,14 @@ export function fieldUsers(report: Report, dataset: string, field: string): stri
           v.sort?.by === field),
     )
     .map((v) => v.title || v.id);
+  const dashboards = (report.dashboards ?? [])
+    .filter(
+      (d) =>
+        (d.filters ?? []).some((f) => f.field === field) &&
+        d.items.some((i) => report.visuals.some((v) => v.id === i.visual && v.dataset === dataset)),
+    )
+    .map((d) => `${d.title || d.id} (shared filter)`);
+  return [...visuals, ...dashboards];
 }
 
 /** The report with a parameter added, or the one named `original` replaced. */
@@ -491,4 +510,80 @@ export function withoutCalculatedField(report: Report, dataset: string, name: st
 /** The dataset as it is after an edit, for re-registering it in the engine. */
 export function datasetOf(report: Report, dataset: string): Dataset | undefined {
   return report.datasets.find((d) => d.name === dataset);
+}
+
+// ---------------------------------------------------------------------------
+// Dashboards: the report's list, and the edits that keep it valid
+// ---------------------------------------------------------------------------
+
+/** A dashboard id that no other dashboard uses. Ids follow the visual id rules. */
+export function newDashboardId(report: Report): string {
+  const used = new Set((report.dashboards ?? []).map((d) => d.id));
+  let n = used.size + 1;
+  while (used.has(`dashboard_${n}`)) n += 1;
+  return `dashboard_${n}`;
+}
+
+/** An empty dashboard with the default grid, titled with its number. */
+export function blankDashboard(report: Report): Dashboard {
+  const id = newDashboardId(report);
+  return {
+    id,
+    title: `Dashboard ${id.slice("dashboard_".length)}`,
+    columns: GRID_LIMITS.defaultColumns,
+    row_height: GRID_LIMITS.defaultRowHeight,
+    items: [],
+  };
+}
+
+/** The report with its dashboards replaced. The key is removed when the list is empty, so the file is unchanged. */
+export function withDashboards(report: Report, dashboards: Dashboard[]): Report {
+  const next: Report = { ...report };
+  if (dashboards.length > 0) next.dashboards = dashboards;
+  else delete next.dashboards;
+  return next;
+}
+
+/** The report with `dashboard` added, or the dashboard with the same id replaced. */
+export function replaceDashboard(report: Report, dashboard: Dashboard): Report {
+  const list = report.dashboards ?? [];
+  const exists = list.some((d) => d.id === dashboard.id);
+  return withDashboards(report, exists ? list.map((d) => (d.id === dashboard.id ? dashboard : d)) : [...list, dashboard]);
+}
+
+export function withoutDashboard(report: Report, id: string): Report {
+  return withDashboards(report, (report.dashboards ?? []).filter((d) => d.id !== id));
+}
+
+/** A dashboard's filters, with the key removed when there are none (so the file stays unchanged). */
+export function withDashboardFilters(dashboard: Dashboard, filters: Filter[]): Dashboard {
+  const next: Dashboard = { ...dashboard };
+  if (filters.length > 0) next.filters = filters;
+  else delete next.filters;
+  return next;
+}
+
+/** Dashboards that place a visual. */
+export function dashboardsWithVisual(report: Report, visualId: string): Dashboard[] {
+  return (report.dashboards ?? []).filter((d) => d.items.some((i) => i.visual === visualId));
+}
+
+/** The report with every placement of a visual removed from every dashboard. */
+export function withoutVisualPlacements(report: Report, visualId: string): Report {
+  return withDashboards(
+    report,
+    (report.dashboards ?? []).map((d) => ({ ...d, items: d.items.filter((i) => i.visual !== visualId) })),
+  );
+}
+
+/** Columns of a dashboard's visuals, one entry per name (the first dataset that has it). */
+export function dashboardColumns(report: Report, dashboard: Dashboard, schemas: Record<string, ColumnView[]>): ColumnView[] {
+  const seen = new Map<string, ColumnView>();
+  for (const item of dashboard.items) {
+    const visual = report.visuals.find((v) => v.id === item.visual);
+    for (const column of visual ? schemas[visual.dataset] ?? [] : []) {
+      if (!seen.has(column.name)) seen.set(column.name, column);
+    }
+  }
+  return [...seen.values()];
 }

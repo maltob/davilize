@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use dv_core::{Dataset, Parameter, Report, Visual};
+use dv_core::{Dataset, Filter, Parameter, Report, Visual};
 use tauri::State;
 
 use crate::error::ApiError;
@@ -89,6 +89,25 @@ pub async fn profile_dataset(state: Shared<'_>, dataset: String) -> Result<Query
     blocking(move || {
         let engine = state.lock_engine()?;
         service::profile(&engine, &dataset)
+    })
+    .await
+}
+
+/// Runs one visual as placed on a dashboard: `filters` are the dashboard's shared
+/// filters, added for the visual's dataset when it has the column. Same parameter
+/// rules as `render_visual`.
+#[tauri::command]
+pub async fn render_dashboard_visual(
+    state: Shared<'_>,
+    visual: Visual,
+    filters: Vec<Filter>,
+    parameters: Vec<Parameter>,
+    values: BTreeMap<String, String>,
+) -> Result<RenderedVisual, ApiError> {
+    let state = state.inner().clone();
+    blocking(move || {
+        let engine = state.lock_engine()?;
+        service::render_dashboard_visual(&engine, &visual, &filters, &parameters, &values)
     })
     .await
 }

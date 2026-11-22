@@ -11,6 +11,7 @@
 //! Spec generation is pure: it reads the [`Table`] and returns JSON, so it can be
 //! tested without touching files or fonts.
 
+pub mod dashboard;
 pub mod html;
 pub mod raster;
 pub mod svg;
@@ -22,7 +23,8 @@ use duckdb::arrow::record_batch::RecordBatch;
 use dv_core::{ChartType, Encodings, Visual};
 use serde_json::Value;
 
-pub use html::{Scripts, html_report};
+pub use dashboard::dashboard_views;
+pub use html::{ChartPlacement, DashboardView, Scripts, html_dashboards, html_report};
 pub use table::{Cell, Column, Kind, Sampling, Table};
 
 /// Rows embedded in a spec or rendered per visual before the cap applies.

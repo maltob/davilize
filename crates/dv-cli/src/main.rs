@@ -89,8 +89,9 @@ enum Command {
     /// Run every visual of a report and write its outputs to the output directory.
     ///
     /// Per visual: csv, parquet (data), svg, png, pdf (every chart type).
-    /// Per report: html (all visuals on one page) and xlsx (one sheet per visual),
-    /// written as <report-file-stem>.html and <report-file-stem>.xlsx.
+    /// Per report: html (all visuals on one page, or one section per dashboard when the
+    /// report defines dashboards) and xlsx (one sheet per visual), written as
+    /// <report-file-stem>.html and <report-file-stem>.xlsx.
     Refresh {
         /// The .dvz report to refresh.
         report: PathBuf,

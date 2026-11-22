@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use duckdb::arrow::array::Array;
 use duckdb::arrow::record_batch::RecordBatch;
 use duckdb::arrow::util::display::array_value_to_string;
-use dv_core::{Dataset, ParamValues, Parameter, Report, Source, SourceKind, Visual};
+use dv_core::{
+    Dashboard, Dataset, Filter, ParamValues, Parameter, Report, Source, SourceKind, Visual,
+};
 use dv_engine::sql::quote_ident;
 use dv_engine::{ColumnInfo, Engine, OutputFormat, compile_visual, infer_format};
 use dv_render::Rendered;
@@ -473,14 +475,49 @@ pub fn render_visual(
     let sql = compile_visual(&bound)?;
     let batches = engine.query(&sql)?;
     let rendered = dv_render::prepare(&bound, &batches)?;
-    Ok(RenderedVisual {
+    Ok(to_rendered_visual(&rendered, sql))
+}
+
+/// Runs one visual as it appears on a dashboard: the dashboard's shared `filters`
+/// are added (only when the visual's dataset has the filtered column), then the
+/// result is rendered as [`render_visual`] does. Parameters are bound from `values`.
+pub fn render_dashboard_visual(
+    engine: &Engine,
+    visual: &Visual,
+    filters: &[Filter],
+    parameters: &[Parameter],
+    values: &BTreeMap<String, String>,
+) -> Result<RenderedVisual, ApiError> {
+    let params = bind_params(parameters, values)?;
+    let bound = dv_core::bind_visual(visual, &params)?;
+    let columns = dataset_columns(engine, &visual.dataset)?;
+    let mut dashboard = Dashboard::new("preview", "Preview");
+    dashboard.filters = filters.to_vec();
+    let shared = dv_core::apply_dashboard_filters(&dashboard, &bound, &columns, &params)?;
+    let sql = engine.compile(&shared)?;
+    let batches = engine.query(&sql)?;
+    let rendered = dv_render::prepare(&shared, &batches)?;
+    Ok(to_rendered_visual(&rendered, sql))
+}
+
+fn to_rendered_visual(rendered: &Rendered, sql: String) -> RenderedVisual {
+    RenderedVisual {
         id: rendered.id.clone(),
         title: rendered.title.clone(),
         row_count: rendered.table.rows.len(),
         notes: rendered.notes.clone(),
         spec: rendered.spec.clone(),
         sql,
-    })
+    }
+}
+
+/// Column names of a dataset, as the engine sees them (calculated fields included).
+fn dataset_columns(engine: &Engine, dataset: &str) -> Result<Vec<String>, ApiError> {
+    Ok(engine
+        .schema(dataset)?
+        .into_iter()
+        .map(|c| c.name)
+        .collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -569,8 +606,23 @@ pub fn export_report(
             }
         }
         ExportFormat::Html => {
-            let rendered = render_all(engine, report, &bound)?;
-            let page = dv_render::html_report(&report.name, &rendered, &Scripts::Cdn)?;
+            // With dashboards, the page is one grid per dashboard (as the CLI writes it).
+            let page = if report.dashboards.is_empty() {
+                let rendered = render_all(engine, report, &bound)?;
+                dv_render::html_report(&report.name, &rendered, &Scripts::Cdn)?
+            } else {
+                let views = dv_render::dashboard_views(
+                    report,
+                    &bound,
+                    |dataset| dataset_columns(engine, dataset),
+                    |visual| {
+                        let batches = engine.run_visual(visual)?;
+                        Ok(dv_render::prepare(visual, &batches)?)
+                    },
+                    ApiError::from,
+                )?;
+                dv_render::html_dashboards(&report.name, &views, &Scripts::Cdn)?
+            };
             let path = dir.join(format!("{stem}.html"));
             write_file(&path, page.as_bytes())?;
             files.push(path.display().to_string());

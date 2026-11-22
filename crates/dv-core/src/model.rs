@@ -21,6 +21,10 @@ pub struct Report {
     pub visuals: Vec<Visual>,
     #[serde(default)]
     pub parameters: Vec<Parameter>,
+    /// Dashboards lay visuals out on a grid. When present, the HTML page shows
+    /// these instead of every visual. Omitted from the JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dashboards: Vec<Dashboard>,
 }
 
 impl Report {
@@ -33,6 +37,7 @@ impl Report {
             datasets: Vec::new(),
             visuals: Vec::new(),
             parameters: Vec::new(),
+            dashboards: Vec::new(),
         }
     }
 
@@ -143,6 +148,8 @@ impl Report {
                 check_declared(&parameter_names, &reference.param)?;
             }
         }
+
+        check_dashboards(&self.dashboards, &visual_ids, &parameter_names)?;
         Ok(())
     }
 }
@@ -153,6 +160,99 @@ fn check_declared(declared: &HashSet<&str>, name: &str) -> Result<(), CoreError>
     } else {
         Err(invalid(format!("reference to unknown parameter '{name}'")))
     }
+}
+
+/// Checks dashboards: unique ids, grid size, items (a known visual, placed once,
+/// inside the grid, not overlapping another item) and shared filters.
+fn check_dashboards(
+    dashboards: &[Dashboard],
+    visual_ids: &HashSet<&str>,
+    parameter_names: &HashSet<&str>,
+) -> Result<(), CoreError> {
+    let mut ids = HashSet::new();
+    for dashboard in dashboards {
+        check_name("dashboard id", &dashboard.id)?;
+        let id = dashboard.id.as_str();
+        if !ids.insert(id) {
+            return Err(invalid(format!("duplicate dashboard id '{id}'")));
+        }
+        if !(DASHBOARD_MIN_COLUMNS..=DASHBOARD_MAX_COLUMNS).contains(&dashboard.columns) {
+            return Err(invalid(format!(
+                "dashboard '{id}': columns must be between {DASHBOARD_MIN_COLUMNS} and {DASHBOARD_MAX_COLUMNS}, got {}",
+                dashboard.columns
+            )));
+        }
+        if !(DASHBOARD_MIN_ROW_HEIGHT..=DASHBOARD_MAX_ROW_HEIGHT).contains(&dashboard.row_height) {
+            return Err(invalid(format!(
+                "dashboard '{id}': row_height must be between {DASHBOARD_MIN_ROW_HEIGHT} and {DASHBOARD_MAX_ROW_HEIGHT} px, got {}",
+                dashboard.row_height
+            )));
+        }
+
+        let mut placed = HashSet::new();
+        for item in &dashboard.items {
+            let visual = item.visual.as_str();
+            if !visual_ids.contains(visual) {
+                return Err(invalid(format!(
+                    "dashboard '{id}' places unknown visual '{visual}'"
+                )));
+            }
+            if !placed.insert(visual) {
+                return Err(invalid(format!(
+                    "dashboard '{id}' places visual '{visual}' more than once"
+                )));
+            }
+            if item.w == 0 || item.h == 0 {
+                return Err(invalid(format!(
+                    "dashboard '{id}': visual '{visual}' needs a width and a height of at least 1"
+                )));
+            }
+            let right = u64::from(item.x) + u64::from(item.w);
+            if right > u64::from(dashboard.columns) {
+                return Err(invalid(format!(
+                    "dashboard '{id}': visual '{visual}' ends at column {right}, past the {} columns",
+                    dashboard.columns
+                )));
+            }
+        }
+        for (index, a) in dashboard.items.iter().enumerate() {
+            for b in &dashboard.items[index + 1..] {
+                if overlaps(a, b) {
+                    return Err(invalid(format!(
+                        "dashboard '{id}': visuals '{}' and '{}' overlap",
+                        a.visual, b.visual
+                    )));
+                }
+            }
+        }
+
+        for filter in &dashboard.filters {
+            if filter.scope == FilterScope::Aggregate {
+                return Err(invalid(format!(
+                    "dashboard '{id}': filter on '{}' uses scope 'aggregate'; dashboard filters apply to rows only",
+                    filter.field
+                )));
+            }
+            crate::dashboard::check_filter_shape(filter)
+                .map_err(|e| invalid(format!("dashboard '{id}': {e}")))?;
+            for value in &filter.values {
+                if let Some(name) = crate::params::param_ref(value)? {
+                    check_declared(parameter_names, name)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// True when two items share at least one grid cell.
+fn overlaps(a: &DashboardItem, b: &DashboardItem) -> bool {
+    let (ax, ay) = (u64::from(a.x), u64::from(a.y));
+    let (bx, by) = (u64::from(b.x), u64::from(b.y));
+    ax < bx + u64::from(b.w)
+        && bx < ax + u64::from(a.w)
+        && ay < by + u64::from(b.h)
+        && by < ay + u64::from(a.h)
 }
 
 fn invalid(message: String) -> CoreError {
@@ -473,6 +573,72 @@ pub enum ParamType {
     Date,
 }
 
+/// Dashboard grid limits and defaults. A dashboard has 1 to 24 columns and rows
+/// of 20 to 400 pixels; a new one has 12 columns and 80-pixel rows.
+pub const DASHBOARD_MIN_COLUMNS: u32 = 1;
+pub const DASHBOARD_MAX_COLUMNS: u32 = 24;
+pub const DASHBOARD_DEFAULT_COLUMNS: u32 = 12;
+pub const DASHBOARD_MIN_ROW_HEIGHT: u32 = 20;
+pub const DASHBOARD_MAX_ROW_HEIGHT: u32 = 400;
+pub const DASHBOARD_DEFAULT_ROW_HEIGHT: u32 = 80;
+
+/// A dashboard: visuals placed on a grid, plus filters shared by its visuals.
+/// See docs/reports.md ("Dashboards") for the rules.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Dashboard {
+    /// Unique among dashboards; same name rules as visual ids.
+    pub id: String,
+    pub title: String,
+    #[serde(default = "default_dashboard_columns")]
+    pub columns: u32,
+    /// Height of one grid row in pixels.
+    #[serde(default = "default_dashboard_row_height")]
+    pub row_height: u32,
+    #[serde(default)]
+    pub items: Vec<DashboardItem>,
+    /// Row filters applied to every visual on this dashboard whose dataset has
+    /// the filtered column. Parameters are the report's (global) parameters.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filters: Vec<Filter>,
+}
+
+fn default_dashboard_columns() -> u32 {
+    DASHBOARD_DEFAULT_COLUMNS
+}
+
+fn default_dashboard_row_height() -> u32 {
+    DASHBOARD_DEFAULT_ROW_HEIGHT
+}
+
+impl Dashboard {
+    /// An empty dashboard with the default grid.
+    pub fn new(id: impl Into<String>, title: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            title: title.into(),
+            columns: DASHBOARD_DEFAULT_COLUMNS,
+            row_height: DASHBOARD_DEFAULT_ROW_HEIGHT,
+            items: Vec::new(),
+            filters: Vec::new(),
+        }
+    }
+}
+
+/// A visual placed on a dashboard. `x` and `y` are 0-based grid units from the
+/// top-left; `w` and `h` are the size in grid units (at least 1). Items must fit
+/// inside `columns` and must not overlap.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DashboardItem {
+    /// The id of a visual in the report. Each visual appears at most once per dashboard.
+    pub visual: String,
+    #[serde(default)]
+    pub x: u32,
+    #[serde(default)]
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,6 +703,7 @@ mod tests {
                 limit: Some(Limit::Rows(10)),
             }],
             parameters: vec![Parameter::new("year", Some(serde_json::json!(2024)))],
+            dashboards: Vec::new(),
         }
     }
 
@@ -740,6 +907,47 @@ mod tests {
         let mut report = sample_report();
         report.datasets[0].calculated_fields[0].expression = "   ".into();
         assert!(matches!(report.validate(), Err(CoreError::Invalid(_))));
+    }
+
+    #[test]
+    fn dashboards_round_trip_and_default_their_grid() {
+        let text = r#"{
+            "version": 1,
+            "name": "r",
+            "sources": [{"name": "s", "type": "file", "path": "s.csv", "format": "csv"}],
+            "datasets": [{"name": "d", "source": "s"}],
+            "visuals": [{"id": "v", "title": "t", "dataset": "d", "chart": "table"}],
+            "dashboards": [{
+                "id": "overview", "title": "Overview",
+                "items": [{"visual": "v", "w": 6, "h": 3}]
+            }]
+        }"#;
+        let report = Report::from_json(text).unwrap();
+        let dashboard = &report.dashboards[0];
+        assert_eq!(dashboard.columns, 12);
+        assert_eq!(dashboard.row_height, 80);
+        assert_eq!(dashboard.items[0].x, 0);
+        assert_eq!(dashboard.items[0].y, 0);
+        assert!(dashboard.filters.is_empty());
+
+        let again = Report::from_json(&report.to_json().unwrap()).unwrap();
+        assert_eq!(again, report);
+        assert_eq!(again.to_json().unwrap(), report.to_json().unwrap());
+    }
+
+    #[test]
+    fn dashboards_are_omitted_when_empty_and_written_when_present() {
+        assert!(!Report::new("r").to_json().unwrap().contains("dashboards"));
+
+        let mut report = sample_report();
+        report.dashboards = vec![Dashboard::new("d", "D")];
+        let text = report.to_json().unwrap();
+        assert!(text.contains("\"dashboards\""));
+        assert!(text.contains("\"row_height\": 80"));
+        assert!(text.contains("\"columns\": 12"));
+        // Empty items are written, and no filters key appears without filters.
+        assert!(text.contains("\"items\": []"));
+        assert!(!text.contains("\"filters\": []"));
     }
 
     #[test]

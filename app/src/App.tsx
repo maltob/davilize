@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, pickDataFiles, pickFolder, pickReportToOpen, pickReportToSave, toApiError } from "./api";
 import { ChartView } from "./components/ChartView";
+import { DashboardsPanel } from "./components/Dashboards";
 import { DataGrid } from "./components/DataGrid";
 import { DataPanel, type FieldTarget } from "./components/DataPanel";
 import { ParameterValuesBar } from "./components/Parameters";
@@ -9,23 +10,28 @@ import { useDatasetTable, useRender } from "./hooks";
 import {
   applySlots,
   autoTitle,
+  blankDashboard,
   blankVisual,
+  dashboardsWithVisual,
   datasetOf,
   emptySlots,
   hasFields,
   newVisualId,
   parameterIssues,
   pillFor,
+  replaceDashboard,
   requestValues,
   slotsFromVisual,
   withCalculatedField,
+  withoutDashboard,
+  withoutVisualPlacements,
   withoutCalculatedField,
   withoutParameter,
   withParameter,
   type Pill,
   type Slot,
 } from "./model";
-import type { ApiError, CalculatedField, ColumnView, Parameter, Report, Visual } from "./types";
+import type { ApiError, CalculatedField, ColumnView, Dashboard, Parameter, Report, Visual } from "./types";
 
 const EXPORT_FORMATS = [
   { value: "html", label: "HTML page" },
@@ -61,6 +67,8 @@ export default function App() {
   const [exportFormat, setExportFormat] = useState("html");
   // Runtime values for the report's parameters. They are not saved in the .dvz.
   const [paramValues, setParamValues] = useState<Record<string, string>>({});
+  // The dashboard shown in the Report tab, or null for "All visuals".
+  const [dashboardId, setDashboardId] = useState<string | null>(null);
 
   const columns = useMemo(() => (draft ? schemas[draft.dataset] ?? [] : []), [draft, schemas]);
   const slots = useMemo(() => (draft ? slotsFromVisual(draft) : emptySlots()), [draft]);
@@ -129,11 +137,36 @@ export default function App() {
   }
 
   function deleteVisual(id: string) {
-    setReport((current) => ({ ...current, visuals: current.visuals.filter((v) => v.id !== id) }));
+    const placedOn = dashboardsWithVisual(report, id).map((d) => d.title || d.id);
+    setReport((current) =>
+      withoutVisualPlacements({ ...current, visuals: current.visuals.filter((v) => v.id !== id) }, id),
+    );
     setReportDirty(true);
+    if (placedOn.length > 0) {
+      const title = report.visuals.find((v) => v.id === id)?.title || id;
+      setNotice({ tone: "info", text: `Deleted visual "${title}". It was also removed from ${placedOn.join(", ")}.` });
+    }
     if (draft?.id === id) {
       setDraft(activeDataset ? blankVisual(activeDataset, newVisualId(report)) : null);
     }
+  }
+
+  function createDashboard() {
+    const dashboard = blankDashboard(report);
+    setReport((current) => replaceDashboard(current, dashboard));
+    setReportDirty(true);
+    setDashboardId(dashboard.id);
+  }
+
+  function saveDashboard(dashboard: Dashboard) {
+    setReport((current) => replaceDashboard(current, dashboard));
+    setReportDirty(true);
+  }
+
+  function deleteDashboard(id: string) {
+    setReport((current) => withoutDashboard(current, id));
+    setReportDirty(true);
+    if (dashboardId === id) setDashboardId(null);
   }
 
   function openVisual(visual: Visual) {
@@ -218,6 +251,7 @@ export default function App() {
       setReportPath(opened.path);
       setReportDirty(false);
       setParamValues({});
+      setDashboardId(null);
       setSchemas(Object.fromEntries(opened.datasets.map((d) => [d.name, d.columns])));
       const first = opened.report.visuals[0];
       const dataset = first?.dataset ?? opened.report.datasets[0]?.name ?? null;
@@ -409,7 +443,16 @@ export default function App() {
                       {savedVisual ? (draftChanged ? "Update visual" : "Saved") : "Add to report"}
                     </button>
                     {savedVisual && (
-                      <button type="button" className={button} onClick={() => deleteVisual(draft.id)}>
+                      <button
+                        type="button"
+                        className={button}
+                        onClick={() => deleteVisual(draft.id)}
+                        title={
+                          dashboardsWithVisual(report, draft.id).length > 0
+                            ? `Also removes it from ${dashboardsWithVisual(report, draft.id).map((d) => d.title || d.id).join(", ")}`
+                            : undefined
+                        }
+                      >
                         Delete visual
                       </button>
                     )}
@@ -527,13 +570,26 @@ export default function App() {
               )}
             </div>
           ) : (
-            <ReportView
-              visuals={report.visuals}
-              parameters={report.parameters}
+            <DashboardsPanel
+              report={report}
+              schemas={schemas}
+              selectedId={dashboardId}
+              onSelect={setDashboardId}
+              onNew={createDashboard}
+              onSave={saveDashboard}
+              onDelete={deleteDashboard}
               values={paramValues}
               blocked={paramsBlocked}
               onOpen={openVisual}
-            />
+            >
+              <ReportView
+                visuals={report.visuals}
+                parameters={report.parameters}
+                values={paramValues}
+                blocked={paramsBlocked}
+                onOpen={openVisual}
+              />
+            </DashboardsPanel>
           )}
         </main>
       </div>

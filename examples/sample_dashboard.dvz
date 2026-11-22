@@ -1,0 +1,182 @@
+{
+  "version": 1,
+  "name": "Sample sales (dashboards)",
+  "sources": [
+    {
+      "name": "sales_csv",
+      "type": "file",
+      "path": "sample.csv",
+      "format": "csv"
+    }
+  ],
+  "datasets": [
+    {
+      "name": "sales",
+      "source": "sales_csv"
+    }
+  ],
+  "visuals": [
+    {
+      "id": "revenue_by_region",
+      "title": "Revenue by region",
+      "dataset": "sales",
+      "chart": "bar",
+      "encodings": {
+        "x": "region",
+        "y": "total_revenue"
+      },
+      "dimensions": [
+        "region"
+      ],
+      "measures": [
+        {
+          "field": "revenue",
+          "agg": "sum",
+          "alias": "total_revenue"
+        }
+      ],
+      "sort": {
+        "by": "total_revenue",
+        "direction": "desc"
+      }
+    },
+    {
+      "id": "product_revenue",
+      "title": "Revenue by product",
+      "dataset": "sales",
+      "chart": "table",
+      "dimensions": [
+        "product"
+      ],
+      "measures": [
+        {
+          "field": "revenue",
+          "agg": "sum",
+          "alias": "revenue_total"
+        },
+        {
+          "field": "order_id",
+          "agg": "count",
+          "alias": "orders"
+        }
+      ],
+      "sort": {
+        "by": "revenue_total",
+        "direction": "desc"
+      }
+    },
+    {
+      "id": "units_by_product",
+      "title": "Units by product",
+      "dataset": "sales",
+      "chart": "bar",
+      "encodings": {
+        "x": "product",
+        "y": "total_units"
+      },
+      "dimensions": [
+        "product"
+      ],
+      "measures": [
+        {
+          "field": "units",
+          "agg": "sum",
+          "alias": "total_units"
+        }
+      ],
+      "sort": {
+        "by": "total_units",
+        "direction": "desc"
+      }
+    }
+  ],
+  "dashboards": [
+    {
+      "id": "overview",
+      "title": "Overview",
+      "columns": 12,
+      "row_height": 80,
+      "items": [
+        {
+          "visual": "revenue_by_region",
+          "x": 0,
+          "y": 0,
+          "w": 6,
+          "h": 4
+        },
+        {
+          "visual": "product_revenue",
+          "x": 6,
+          "y": 0,
+          "w": 6,
+          "h": 4
+        }
+      ],
+      "filters": [
+        {
+          "field": "region",
+          "op": "eq",
+          "values": [
+            {
+              "param": "region"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "by_product",
+      "title": "By product (orders of two or more units)",
+      "columns": 12,
+      "row_height": 60,
+      "items": [
+        {
+          "visual": "units_by_product",
+          "x": 0,
+          "y": 0,
+          "w": 6,
+          "h": 5
+        },
+        {
+          "visual": "revenue_by_region",
+          "x": 6,
+          "y": 0,
+          "w": 6,
+          "h": 5
+        }
+      ],
+      "filters": [
+        {
+          "field": "region",
+          "op": "eq",
+          "values": [
+            {
+              "param": "region"
+            }
+          ]
+        },
+        {
+          "field": "units",
+          "op": "ge",
+          "values": [
+            2
+          ]
+        }
+      ]
+    }
+  ],
+  "parameters": [
+    {
+      "name": "region",
+      "type": "string",
+      "default": "North",
+      "allowed": [
+        "North",
+        "South",
+        "East",
+        "West"
+      ],
+      "description": "Region shared by the dashboard filters"
+    }
+  ]
+}

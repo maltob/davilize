@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, toApiError } from "./api";
-import type { ApiError, Parameter, RenderedVisual, Visual } from "./types";
+import type { ApiError, Filter, Parameter, RenderedVisual, Visual } from "./types";
 import { hasFields, requestValues } from "./model";
 
 export interface RenderState {
@@ -15,6 +15,7 @@ const IDLE: RenderState = { loading: false, result: null, error: null };
  * Runs a visual through the backend whenever it changes or a parameter value changes.
  * Results from older requests are ignored, and `delay` debounces fast edits to the shelves.
  * While `blocked` (a parameter value is invalid) nothing is sent; the reason is shown instead.
+ * With `dashboardFilters`, the visual is run as placed on a dashboard (shared filters added).
  */
 export function useRender(
   visual: Visual | null,
@@ -22,11 +23,13 @@ export function useRender(
   parameters: Parameter[],
   values: Record<string, string>,
   blocked: boolean,
+  dashboardFilters: Filter[] | null = null,
 ): RenderState {
   const [state, setState] = useState<RenderState>(IDLE);
   const requested = requestValues(parameters, values);
   const valuesKey = JSON.stringify(requested);
   const parametersKey = JSON.stringify(parameters);
+  const filtersKey = JSON.stringify(dashboardFilters);
   useEffect(() => {
     if (!visual || !hasFields(visual)) {
       setState(IDLE);
@@ -43,8 +46,10 @@ export function useRender(
     let current = true;
     setState((prev) => ({ ...prev, loading: true }));
     const timer = window.setTimeout(() => {
-      api
-        .renderVisual(visual, parameters, requested)
+      const request = dashboardFilters
+        ? api.renderDashboardVisual(visual, dashboardFilters, parameters, requested)
+        : api.renderVisual(visual, parameters, requested);
+      request
         .then((result) => {
           if (current) setState({ loading: false, result, error: null });
         })
@@ -59,7 +64,7 @@ export function useRender(
     // `requested` and `parameters` are represented by their JSON keys, which keeps
     // the effect from re-running on every render when the objects are new but equal.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visual, delay, valuesKey, parametersKey, blocked]);
+  }, [visual, delay, valuesKey, parametersKey, blocked, filtersKey]);
   return state;
 }
 

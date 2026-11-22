@@ -7,6 +7,7 @@ import type {
   ColumnView,
   Dataset,
   ExportSummary,
+  Filter,
   OpenedReport,
   Parameter,
   QueryTable,
@@ -35,6 +36,9 @@ export const api = {
   /** `values` maps parameter names to the text the user entered; missing names use defaults. */
   renderVisual: (visual: Visual, parameters: Parameter[], values: Record<string, string>) =>
     invoke<RenderedVisual>("render_visual", { visual, parameters, values }),
+  /** A visual as placed on a dashboard: the dashboard's shared filters are added where the dataset has the field. */
+  renderDashboardVisual: (visual: Visual, filters: Filter[], parameters: Parameter[], values: Record<string, string>) =>
+    invoke<RenderedVisual>("render_dashboard_visual", { visual, filters, parameters, values }),
   exportReport: (report: Report, format: string, dir: string, values: Record<string, string>) =>
     invoke<ExportSummary>("export_report", { report, format, dir, values }),
   /** Resolves when the field is valid; rejects with an `invalid` error that names the field. */

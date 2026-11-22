@@ -1,11 +1,12 @@
-//! Self-contained HTML report: one page with every visual, rendered by vega-embed.
+//! Self-contained HTML report: one page with every visual, rendered by vega-embed,
+//! or (when the report has dashboards) one section per dashboard laid out on a CSS grid.
 //!
 //! Escaping: titles, notes and any other text in the markup go through
 //! [`escape_html`]. Specs (which hold data) are embedded as JavaScript with
 //! [`json_for_script`], which escapes `<`, `>`, `&` and the JS line separators, so
 //! no data value can close the `<script>` element or open a comment.
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{RenderError, Rendered};
 
@@ -28,14 +29,35 @@ pub enum Scripts<'a> {
     },
 }
 
-/// Renders the full report page.
+/// A dashboard ready for the HTML page: its grid and the charts placed on it.
+#[derive(Debug, Clone)]
+pub struct DashboardView {
+    pub id: String,
+    pub title: String,
+    pub columns: u32,
+    /// Height of one grid row in pixels.
+    pub row_height: u32,
+    pub charts: Vec<ChartPlacement>,
+}
+
+/// A rendered chart at a grid position: column `x` and row `y` (0-based), spanning
+/// `w` columns and `h` rows.
+#[derive(Debug, Clone)]
+pub struct ChartPlacement {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+    pub chart: Rendered,
+}
+
+/// Renders the full report page with every visual, in report order.
 pub fn html_report(
     report_name: &str,
     visuals: &[Rendered],
     scripts: &Scripts<'_>,
 ) -> Result<String, RenderError> {
     let specs: Vec<Value> = visuals.iter().map(|v| v.spec.clone()).collect();
-    let specs_js = json_for_script(&Value::Array(specs));
 
     let mut body = String::new();
     body.push_str(&format!("<h1>{}</h1>\n", escape_html(report_name)));
@@ -54,6 +76,113 @@ pub fn html_report(
         body.push_str("</section>\n");
     }
 
+    page(report_name, &body, specs, scripts, "")
+}
+
+/// Renders a report page with one section per dashboard. Each dashboard is a CSS
+/// grid: items are placed with `grid-column` and `grid-row`, and each chart fills its
+/// cell. At 700px wide or less the grid becomes one column, with the cells stacked
+/// in reading order (top to bottom, then left to right).
+pub fn html_dashboards(
+    report_name: &str,
+    dashboards: &[DashboardView],
+    scripts: &Scripts<'_>,
+) -> Result<String, RenderError> {
+    let mut body = format!("<h1>{}</h1>\n", escape_html(report_name));
+    if dashboards.is_empty() {
+        body.push_str("<p class=\"note\">This report has no dashboards.</p>\n");
+    }
+    // One chart per placement, numbered in page order so each gets its own element id.
+    let mut specs = Vec::new();
+    for dashboard in dashboards {
+        body.push_str(&format!(
+            "<section class=\"dashboard\" id=\"dashboard-{}\">\n<h2>{}</h2>\n",
+            escape_html(&dashboard.id),
+            escape_html(&dashboard.title)
+        ));
+        body.push_str(&format!(
+            "<div class=\"dash-grid\" style=\"grid-template-columns: repeat({columns}, 1fr); grid-auto-rows: {row}px; --row-px: {row}px\">\n",
+            columns = dashboard.columns,
+            row = dashboard.row_height
+        ));
+
+        let mut order: Vec<&ChartPlacement> = dashboard.charts.iter().collect();
+        order.sort_by_key(|p| (p.y, p.x));
+        for placement in order {
+            let index = specs.len();
+            let chart = &placement.chart;
+            let (spec, fills) = dashboard_spec(&chart.spec);
+            specs.push(spec);
+            body.push_str(&format!(
+                "<div class=\"dash-item\" style=\"grid-column: {x} / span {w}; grid-row: {y} / span {h}; --rows: {h}\">\n",
+                x = placement.x.saturating_add(1),
+                y = placement.y.saturating_add(1),
+                w = placement.w,
+                h = placement.h
+            ));
+            body.push_str(&format!("<h3>{}</h3>\n", escape_html(&chart.title)));
+            body.push_str(&format!(
+                "<div class=\"chart{}\" id=\"chart-{index}\"></div>\n",
+                if fills { "" } else { " natural" }
+            ));
+            for note in &chart.notes {
+                body.push_str(&format!("<p class=\"note\">{}</p>\n", escape_html(note)));
+            }
+            body.push_str("</div>\n");
+        }
+        body.push_str("</div>\n</section>\n");
+    }
+
+    page(report_name, &body, specs, scripts, DASHBOARD_CSS)
+}
+
+/// Styles added only to pages that have dashboards, so other pages are unchanged.
+const DASHBOARD_CSS: &str = "\
+.dashboard { margin-top: 1.5em; }
+.dash-grid { display: grid; gap: 12px; }
+.dash-item { min-width: 0; min-height: 0; display: flex; flex-direction: column; border: 1px solid #e4e7eb; border-radius: 6px; padding: 8px; overflow: hidden; }
+.dash-item h3 { font-size: 1rem; margin: 0 0 4px; }
+.dash-item .chart { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.dash-item .chart.natural { overflow: auto; }
+@media (max-width: 700px) {
+  .dash-grid { grid-template-columns: 1fr !important; grid-auto-rows: auto !important; }
+  .dash-item { grid-column: auto !important; grid-row: auto !important; height: calc(var(--rows) * var(--row-px)); }
+}
+";
+
+/// The spec of a chart inside a dashboard cell: a numeric width or height becomes
+/// `"container"`, so the chart fills the cell, and autosize refits it on resize.
+/// Also says whether the chart was resized to fill the cell; charts that keep
+/// their natural size (tables) are marked so the cell can scroll them.
+fn dashboard_spec(spec: &Value) -> (Value, bool) {
+    let mut spec = spec.clone();
+    let mut fills = false;
+    if let Value::Object(map) = &mut spec {
+        for key in ["width", "height"] {
+            if map.get(key).is_some_and(Value::is_number) {
+                map.insert(key.to_string(), json!("container"));
+                fills = true;
+            }
+        }
+        if fills {
+            map.insert(
+                "autosize".to_string(),
+                json!({"type": "fit", "contains": "padding", "resize": true}),
+            );
+        }
+    }
+    (spec, fills)
+}
+
+/// Assembles the page around a body. `extra_css` is appended to the style block.
+fn page(
+    report_name: &str,
+    body: &str,
+    specs: Vec<Value>,
+    scripts: &Scripts<'_>,
+    extra_css: &str,
+) -> Result<String, RenderError> {
+    let specs_js = json_for_script(&Value::Array(specs));
     let libraries = library_tags(scripts)?;
     Ok(format!(
         "<!doctype html>\n\
@@ -71,6 +200,7 @@ h2 {{ font-size: 1.15rem; margin: 1.2em 0 0.4em; }}\n\
 .chart {{ overflow-x: auto; max-width: 100%; }}\n\
 .note {{ color: #616e7c; font-size: 0.875rem; margin: 4px 0; }}\n\
 .error {{ color: #b42318; }}\n\
+{extra_css}\
 </style>\n\
 </head>\n\
 <body>\n\

@@ -5,10 +5,13 @@ use duckdb::arrow::record_batch::RecordBatch;
 use dv_core::{Aggregate, ChartType, Encodings, Measure, Visual};
 use serde_json::{Value, json};
 
-use crate::html::{Scripts, escape_html, html_report, json_for_script};
+use crate::html::{Scripts, escape_html, html_dashboards, html_report, json_for_script};
 use crate::table::{Sampling, Table, excel_serial};
 use crate::vegalite::SCHEMA;
-use crate::{RenderError, prepare, prepare_with_cap, raster, svg, xlsx};
+use crate::{
+    ChartPlacement, DashboardView, RenderError, Rendered, prepare, prepare_with_cap, raster, svg,
+    xlsx,
+};
 
 fn visual(id: &str, chart: ChartType, encodings: Encodings) -> Visual {
     Visual {
@@ -279,6 +282,145 @@ fn html_inline_mode_rejects_vendored_markup_that_would_break_out() {
     )
     .unwrap_err();
     assert!(matches!(err, RenderError::Output(_)));
+}
+
+/// A bar chart rendered from the regions batch, with the given title.
+fn dashboard_chart(id: &str, title: &str) -> Rendered {
+    let mut v = visual(id, ChartType::Bar, enc("region", "total_revenue"));
+    v.title = title.into();
+    prepare(&v, &[regions()]).unwrap()
+}
+
+fn placed(x: u32, y: u32, w: u32, h: u32, title: &str) -> ChartPlacement {
+    ChartPlacement {
+        x,
+        y,
+        w,
+        h,
+        chart: dashboard_chart(&format!("c{x}{y}"), title),
+    }
+}
+
+fn dashboard(charts: Vec<ChartPlacement>) -> DashboardView {
+    DashboardView {
+        id: "overview".into(),
+        title: "Overview".into(),
+        columns: 12,
+        row_height: 80,
+        charts,
+    }
+}
+
+#[test]
+fn dashboard_cells_are_placed_on_a_css_grid() {
+    let page = html_dashboards(
+        "Sales",
+        &[dashboard(vec![
+            placed(0, 0, 6, 4, "Left"),
+            placed(6, 0, 6, 4, "Right"),
+        ])],
+        &Scripts::Cdn,
+    )
+    .unwrap();
+    assert!(page.contains("grid-template-columns: repeat(12, 1fr); grid-auto-rows: 80px"));
+    assert!(page.contains("grid-column: 1 / span 6; grid-row: 1 / span 4"));
+    assert!(page.contains("grid-column: 7 / span 6; grid-row: 1 / span 4"));
+    assert!(page.contains("<section class=\"dashboard\" id=\"dashboard-overview\">"));
+    assert!(page.contains("<h2>Overview</h2>"));
+    assert_eq!(page.matches("class=\"dash-item\"").count(), 2);
+    assert!(page.contains("id=\"chart-0\"") && page.contains("id=\"chart-1\""));
+    assert!(page.contains("cdn.jsdelivr.net/npm/vega@6.4.0"));
+}
+
+#[test]
+fn dashboard_items_are_written_in_reading_order() {
+    // Given out of order, cells appear top to bottom, then left to right, and the
+    // chart ids (which index the specs) follow the same order.
+    let page = html_dashboards(
+        "Sales",
+        &[dashboard(vec![
+            placed(6, 4, 6, 2, "Bottom right"),
+            placed(0, 4, 6, 2, "Bottom left"),
+            placed(6, 0, 6, 4, "Top right"),
+            placed(0, 0, 6, 4, "Top left"),
+        ])],
+        &Scripts::Cdn,
+    )
+    .unwrap();
+    let at = |needle: &str| {
+        page.find(needle)
+            .unwrap_or_else(|| panic!("{needle} missing"))
+    };
+    assert!(at("<h3>Top left</h3>") < at("<h3>Top right</h3>"));
+    assert!(at("<h3>Top right</h3>") < at("<h3>Bottom left</h3>"));
+    assert!(at("<h3>Bottom left</h3>") < at("<h3>Bottom right</h3>"));
+    assert!(at("id=\"chart-0\"") < at("<h3>Top right</h3>"));
+    assert!(at("id=\"chart-0\"") > at("<h3>Top left</h3>"));
+    assert!(at("\"title\":\"Top left\"") < at("\"title\":\"Bottom left\""));
+}
+
+#[test]
+fn dashboards_stack_in_one_column_on_phones() {
+    let page = html_dashboards(
+        "Sales",
+        &[dashboard(vec![placed(0, 0, 6, 4, "A")])],
+        &Scripts::Cdn,
+    )
+    .unwrap();
+    assert!(page.contains("@media (max-width: 700px)"));
+    assert!(page.contains("grid-template-columns: 1fr !important"));
+    assert!(page.contains("grid-column: auto !important"));
+    assert!(page.contains("grid-row: auto !important"));
+    assert!(page.contains("height: calc(var(--rows) * var(--row-px))"));
+    assert!(page.contains("--rows: 4"));
+}
+
+#[test]
+fn dashboard_titles_are_escaped() {
+    let hostile = "<img src=x onerror=alert(1)> & \"q\" </script><script>x()</script>";
+    let mut view = dashboard(vec![placed(0, 0, 12, 2, hostile)]);
+    view.title = hostile.into();
+    let page = html_dashboards(hostile, &[view], &Scripts::Cdn).unwrap();
+    assert!(!page.contains("<img src=x"));
+    assert!(!page.contains("</script><script>x()"));
+    assert!(page.contains("&lt;img src=x onerror=alert(1)&gt; &amp; &quot;q&quot;"));
+    assert!(page.contains("<title>&lt;img"));
+    // Three library tags and one inline block, as for a plain report.
+    assert_eq!(page.matches("</script>").count(), 4);
+}
+
+#[test]
+fn dashboard_charts_fill_their_cell_and_refit_on_resize() {
+    let page = html_dashboards(
+        "Sales",
+        &[dashboard(vec![placed(0, 0, 6, 4, "A")])],
+        &Scripts::Cdn,
+    )
+    .unwrap();
+    assert!(page.contains("\"width\":\"container\""));
+    assert!(page.contains("\"height\":\"container\""));
+    assert!(page.contains("\"resize\":true"));
+
+    // Plain report pages keep the fixed sizes and carry no dashboard styles.
+    let plain = html_report("r", &[dashboard_chart("p", "Plain")], &Scripts::Cdn).unwrap();
+    assert!(!plain.contains("\"container\""));
+    assert!(!plain.contains("dash-grid"));
+    assert!(!plain.contains("@media (max-width: 700px)"));
+}
+
+#[test]
+fn report_without_dashboards_keeps_the_plain_layout() {
+    let page = html_report("r", &[dashboard_chart("p", "Plain")], &Scripts::Cdn).unwrap();
+    assert!(page.contains("<section class=\"visual\">"));
+    assert!(page.contains("<div class=\"chart\" id=\"chart-0\"></div>"));
+    assert!(!page.contains("dashboard"));
+}
+
+#[test]
+fn dashboard_page_with_no_dashboards_says_so() {
+    let page = html_dashboards("Sales", &[], &Scripts::Cdn).unwrap();
+    assert!(page.contains("This report has no dashboards."));
+    assert!(!page.contains("class=\"dash-grid\""));
 }
 
 #[test]

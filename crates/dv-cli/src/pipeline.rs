@@ -51,7 +51,12 @@ pub fn run(report_path: &Path, out_dir: &Path, opts: &Options, log: &Log) -> Cli
     );
 
     let formats = &opts.formats;
-    let needs_render = formats.iter().any(|f| f.engine_format().is_none());
+    // With dashboards, the HTML page is built from its own per-placement renders,
+    // so the per-visual render is only needed for the other formats.
+    let html_from_visuals = report.dashboards.is_empty();
+    let needs_render = formats
+        .iter()
+        .any(|f| f.engine_format().is_none() && (*f != DataOutput::Html || html_from_visuals));
     let mut rendered = Vec::new();
     for visual in &report.visuals {
         let bound = dv_core::bind_visual(visual, &values).map_err(param_error)?;
@@ -87,17 +92,45 @@ pub fn run(report_path: &Path, out_dir: &Path, opts: &Options, log: &Log) -> Cli
             },
             None => dv_render::Scripts::Cdn,
         };
-        let page = dv_render::html_report(&report.name, &rendered, &scripts)?;
         let name = opts
             .html_name
             .clone()
             .unwrap_or_else(|| format!("{stem}.html"));
         let path = out_dir.join(name);
-        write_output(&path, page.as_bytes())?;
-        log.info(
-            &format!("wrote {} ({} visuals)", path.display(), rendered.len()),
-            json!({"path": path.display().to_string(), "visuals": rendered.len()}),
-        );
+        let path_text = path.display().to_string();
+        if report.dashboards.is_empty() {
+            let page = dv_render::html_report(&report.name, &rendered, &scripts)?;
+            write_output(&path, page.as_bytes())?;
+            log.info(
+                &format!("wrote {} ({} visuals)", path.display(), rendered.len()),
+                json!({"path": path_text, "visuals": rendered.len()}),
+            );
+        } else {
+            // Each placement is queried with its dashboard's shared filters added.
+            let views = dv_render::dashboard_views(
+                &report,
+                &values,
+                |dataset| {
+                    Ok(engine
+                        .schema(dataset)?
+                        .into_iter()
+                        .map(|c| c.name)
+                        .collect())
+                },
+                |visual| {
+                    let sql = engine.compile(visual)?;
+                    let batches = engine.query(&sql)?;
+                    Ok(dv_render::prepare(visual, &batches)?)
+                },
+                param_error,
+            )?;
+            let page = dv_render::html_dashboards(&report.name, &views, &scripts)?;
+            write_output(&path, page.as_bytes())?;
+            log.info(
+                &format!("wrote {} ({} dashboards)", path.display(), views.len()),
+                json!({"path": path_text, "dashboards": views.len()}),
+            );
+        }
     }
     if formats.contains(&DataOutput::Xlsx) {
         let bytes = dv_render::xlsx::workbook(&rendered)?;

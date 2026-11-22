@@ -27,6 +27,7 @@ pub fn run() {
             commands::preview_dataset,
             commands::profile_dataset,
             commands::render_visual,
+            commands::render_dashboard_visual,
             commands::export_report,
             commands::validate_calculated_field,
             commands::register_calculated_fields,
