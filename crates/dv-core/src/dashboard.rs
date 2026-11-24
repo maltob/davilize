@@ -267,6 +267,7 @@ mod tests {
             name: "sales".into(),
             source: "s".into(),
             sql: None,
+            joins: Vec::new(),
             calculated_fields: vec![],
         }];
         report.parameters = vec![Parameter::new("region", Some(json!("North")))];

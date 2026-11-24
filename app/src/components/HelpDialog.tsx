@@ -17,6 +17,7 @@ const GLOSSARY: { term: string; meaning: string }[] = [
   { term: "Dimension", meaning: "A field that groups or labels results, such as region or month." },
   { term: "Measure", meaning: "A number that is summed, counted or averaged, such as revenue." },
   { term: "Calculated field", meaning: "A new field made from an expression over other fields, such as revenue * 0.9." },
+  { term: "Joined dataset", meaning: "A dataset made by matching two datasets on columns, such as orders and regions. Inner, left, right or full." },
   { term: "Parameter", meaning: "A value you choose when the report runs, such as a region, without editing the chart." },
   { term: "Chart", meaning: "One picture of the data, built from fields on the shelves: bar, line, scatter, table or heatmap." },
   { term: "Report", meaning: "A .dvz file that holds your data links, fields, parameters, charts and dashboards." },

@@ -9,6 +9,8 @@ mod calc;
 mod calc_tests;
 mod database;
 mod error;
+#[cfg(test)]
+mod join_tests;
 pub mod sql;
 
 use std::cell::RefCell;
@@ -21,8 +23,8 @@ use duckdb::arrow::record_batch::RecordBatch;
 use duckdb::arrow::util::display::array_value_to_string;
 use duckdb::vtab::arrow::ArrowVTab;
 use dv_core::{
-    Dataset, DbKind, FileFormat, ParamType, ParamValues, Parameter, Report, Source, SourceKind,
-    Visual,
+    Dataset, DbKind, FileFormat, JoinKind, ParamType, ParamValues, Parameter, Report, Source,
+    SourceKind, Visual,
 };
 
 pub use database::{connection_env_var, resolve_connection};
@@ -220,7 +222,8 @@ impl Engine {
     }
 
     /// Creates a view named after `dataset`: its SQL, or `SELECT *` from its source,
-    /// plus its calculated fields.
+    /// or its source joined to other relations (see [`Engine::join_base`]), plus its
+    /// calculated fields.
     ///
     /// Calculated fields are layered in declaration order: field N is computed over
     /// the base relation and fields 1 to N-1, so a field may use earlier ones but not
@@ -230,15 +233,22 @@ impl Engine {
         dataset
             .validate_calculated_fields()
             .map_err(|e| EngineError::InvalidSpec(e.to_string()))?;
-        let base = match &dataset.sql {
-            Some(sql) => sql.clone(),
-            None if self.database_sources.borrow().contains(&dataset.source) => {
-                return Err(EngineError::InvalidSpec(format!(
-                    "dataset '{}' needs an sql query: database source '{}' exposes several tables",
-                    dataset.name, dataset.source
-                )));
+        dataset
+            .validate_joins()
+            .map_err(|e| EngineError::InvalidSpec(e.to_string()))?;
+        let base = if !dataset.joins.is_empty() {
+            self.join_base(dataset)?
+        } else {
+            match &dataset.sql {
+                Some(sql) => sql.clone(),
+                None if self.database_sources.borrow().contains(&dataset.source) => {
+                    return Err(EngineError::InvalidSpec(format!(
+                        "dataset '{}' needs an sql query: database source '{}' exposes several tables",
+                        dataset.name, dataset.source
+                    )));
+                }
+                None => format!("SELECT * FROM {}", sql::quote_ident(&dataset.source)),
             }
-            None => format!("SELECT * FROM {}", sql::quote_ident(&dataset.source)),
         };
         let body = if dataset.calculated_fields.is_empty() {
             base
@@ -260,6 +270,125 @@ impl Engine {
             .borrow_mut()
             .insert(dataset.name.clone(), names);
         Ok(())
+    }
+
+    /// Builds the SELECT for a dataset with joins. The source is the left side; each
+    /// join in order combines the result so far (`"l"`) with its `with` relation (`"r"`).
+    ///
+    /// Left columns keep their names. A right column whose name (case-insensitive)
+    /// collides with an existing output column is renamed `<with>_<column>`, then
+    /// `<with>_<column>_2`, `_3`, and so on. Join keys are matched to real columns
+    /// case-insensitively before any SQL is built.
+    fn join_base(&self, dataset: &Dataset) -> Result<String, EngineError> {
+        self.reject_database_relation(dataset, &dataset.source)?;
+        let source_relation = format!("SELECT * FROM {}", sql::quote_ident(&dataset.source));
+        let mut left_columns = self.column_names(&source_relation).map_err(|_| {
+            EngineError::InvalidSpec(format!(
+                "dataset '{}' references unknown source '{}'",
+                dataset.name, dataset.source
+            ))
+        })?;
+        let mut body = source_relation;
+
+        for join in &dataset.joins {
+            self.reject_database_relation(dataset, &join.with)?;
+            let right_columns = self
+                .column_names(&format!("SELECT * FROM {}", sql::quote_ident(&join.with)))
+                .map_err(|_| {
+                    EngineError::InvalidSpec(format!(
+                        "dataset '{}' joins unknown source '{}'",
+                        dataset.name, join.with
+                    ))
+                })?;
+
+            // Resolve every key to the actual spelling of its columns before building SQL.
+            let mut conditions = Vec::with_capacity(join.on.len());
+            for key in &join.on {
+                let left = find_column(&left_columns, &key.left).ok_or_else(|| {
+                    EngineError::InvalidSpec(format!(
+                        "join on dataset '{}': column '{}' not found in '{}'",
+                        dataset.name, key.left, dataset.source
+                    ))
+                })?;
+                let right = find_column(&right_columns, &key.right).ok_or_else(|| {
+                    EngineError::InvalidSpec(format!(
+                        "join on dataset '{}': column '{}' not found in '{}'",
+                        dataset.name, key.right, join.with
+                    ))
+                })?;
+                conditions.push(format!(
+                    "{}.{} = {}.{}",
+                    sql::quote_ident("l"),
+                    sql::quote_ident(left),
+                    sql::quote_ident("r"),
+                    sql::quote_ident(right)
+                ));
+            }
+
+            let mut taken: HashSet<String> = left_columns
+                .iter()
+                .map(|c| c.to_ascii_lowercase())
+                .collect();
+            let mut select = Vec::new();
+            let mut outputs = Vec::new();
+            for column in &left_columns {
+                select.push(format!(
+                    "{}.{} AS {}",
+                    sql::quote_ident("l"),
+                    sql::quote_ident(column),
+                    sql::quote_ident(column)
+                ));
+                outputs.push(column.clone());
+            }
+            for column in &right_columns {
+                let output = unique_output_name(column, &join.with, &mut taken);
+                select.push(format!(
+                    "{}.{} AS {}",
+                    sql::quote_ident("r"),
+                    sql::quote_ident(column),
+                    sql::quote_ident(&output)
+                ));
+                outputs.push(output);
+            }
+
+            body = format!(
+                "SELECT {} FROM ({body}) AS {} {} JOIN {} AS {} ON {}",
+                select.join(", "),
+                sql::quote_ident("l"),
+                join_keyword(join.kind),
+                sql::quote_ident(&join.with),
+                sql::quote_ident("r"),
+                conditions.join(" AND ")
+            );
+            left_columns = outputs;
+        }
+        Ok(body)
+    }
+
+    /// Database sources expose several tables under a schema, so they are not one
+    /// relation that a join can read.
+    fn reject_database_relation(
+        &self,
+        dataset: &Dataset,
+        relation: &str,
+    ) -> Result<(), EngineError> {
+        if self.database_sources.borrow().contains(relation) {
+            return Err(EngineError::InvalidSpec(format!(
+                "dataset '{}' cannot use database source '{relation}' in a join: it exposes several tables; join a dataset with an sql query instead",
+                dataset.name
+            )));
+        }
+        Ok(())
+    }
+
+    /// Checks an expression against the calculated-field allowlist without needing
+    /// any data: used to vet formulas translated from other tools.
+    pub fn check_calculated_expression(
+        &self,
+        field: &str,
+        expression: &str,
+    ) -> Result<(), EngineError> {
+        calc::check(&self.conn, field, expression)
     }
 
     /// Wraps `base` in one `SELECT *, (expr) AS "name"` layer per calculated field.
@@ -459,6 +588,42 @@ pub fn infer_format(path: &Path) -> Result<FileFormat, EngineError> {
             path.display()
         ))),
     }
+}
+
+/// The SQL keyword for a join kind.
+fn join_keyword(kind: JoinKind) -> &'static str {
+    match kind {
+        JoinKind::Inner => "INNER",
+        JoinKind::Left => "LEFT",
+        JoinKind::Right => "RIGHT",
+        JoinKind::Full => "FULL OUTER",
+    }
+}
+
+/// The column in `columns` whose name matches `name` ignoring ASCII case.
+fn find_column<'a>(columns: &'a [String], name: &str) -> Option<&'a str> {
+    columns
+        .iter()
+        .find(|c| c.eq_ignore_ascii_case(name))
+        .map(String::as_str)
+}
+
+/// Picks the output name for a right-side column: its own name when free, otherwise
+/// `<with>_<column>`, with `_2`, `_3`, ... appended while that is taken too. Records the
+/// chosen name in `taken` (lowercase).
+fn unique_output_name(column: &str, with: &str, taken: &mut HashSet<String>) -> String {
+    let mut name = column.to_string();
+    if taken.contains(&name.to_ascii_lowercase()) {
+        let base = format!("{with}_{column}");
+        name = base.clone();
+        let mut suffix = 2;
+        while taken.contains(&name.to_ascii_lowercase()) {
+            name = format!("{base}_{suffix}");
+            suffix += 1;
+        }
+    }
+    taken.insert(name.to_ascii_lowercase());
+    name
 }
 
 /// Renders one cell of a batch as text, by column name.

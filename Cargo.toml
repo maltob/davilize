@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/dv-core", "crates/dv-engine", "crates/dv-render", "crates/dv-publish", "crates/dv-cli", "app/src-tauri"]
+members = ["crates/dv-core", "crates/dv-engine", "crates/dv-render", "crates/dv-publish", "crates/dv-interop", "crates/dv-cli", "app/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"

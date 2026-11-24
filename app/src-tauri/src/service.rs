@@ -92,11 +92,34 @@ pub enum ExportFormat {
     Pdf,
     Xlsx,
     Csv,
+    /// Tableau workbook.
+    Twb,
+    /// Tableau packaged workbook (data files inside).
+    Twbx,
+    /// Power BI template.
+    Pbit,
+    /// Power BI Project folder.
+    Pbip,
 }
 
 impl ExportFormat {
+    /// The interop format and output name for Tableau and Power BI exports.
+    fn interop(self) -> Option<dv_interop::Format> {
+        match self {
+            ExportFormat::Twb => Some(dv_interop::Format::Twb),
+            ExportFormat::Twbx => Some(dv_interop::Format::Twbx),
+            ExportFormat::Pbit => Some(dv_interop::Format::Pbit),
+            ExportFormat::Pbip => Some(dv_interop::Format::Pbip),
+            _ => None,
+        }
+    }
+
     pub fn parse(text: &str) -> Result<Self, ApiError> {
         match text {
+            "twb" => Ok(ExportFormat::Twb),
+            "twbx" => Ok(ExportFormat::Twbx),
+            "pbit" => Ok(ExportFormat::Pbit),
+            "pbip" => Ok(ExportFormat::Pbip),
             "html" => Ok(ExportFormat::Html),
             "png" => Ok(ExportFormat::Png),
             "pdf" => Ok(ExportFormat::Pdf),
@@ -250,6 +273,7 @@ pub fn add_data_files(
             name: name.clone(),
             source: source.name.clone(),
             sql: None,
+            joins: Vec::new(),
             calculated_fields: Vec::new(),
         };
         engine.register_dataset(&dataset)?;
@@ -646,10 +670,16 @@ pub fn export_report(
     std::fs::create_dir_all(dir)
         .map_err(|e| ApiError::new("io", format!("cannot create {}: {e}", dir.display())))?;
     let stem = output_stem(&report.name);
+    if let Some(interop) = format.interop() {
+        return export_interop(report, interop, dir, &stem);
+    }
     let mut files = Vec::new();
     let warnings = Vec::new();
 
     match format {
+        ExportFormat::Twb | ExportFormat::Twbx | ExportFormat::Pbit | ExportFormat::Pbip => {
+            unreachable!("handled above")
+        }
         ExportFormat::Csv => {
             for visual in &report.visuals {
                 let sql = compile_visual(&dv_core::bind_visual(visual, &bound)?)?;
@@ -708,6 +738,103 @@ pub fn export_report(
         }
     }
     Ok(ExportSummary { files, warnings })
+}
+
+fn interop_error(err: dv_interop::InteropError) -> ApiError {
+    match err {
+        dv_interop::InteropError::Io { .. } => ApiError::new("io", err.to_string()),
+        other => ApiError::invalid(other.to_string()),
+    }
+}
+
+/// Writes the report as a Tableau or Power BI file into `dir`. The report's source
+/// paths are already absolute in the app, so no base folder is needed.
+fn export_interop(
+    report: &Report,
+    format: dv_interop::Format,
+    dir: &Path,
+    stem: &str,
+) -> Result<ExportSummary, ApiError> {
+    use dv_interop::Format;
+    let out = match format {
+        Format::Twb => dir.join(format!("{stem}.twb")),
+        Format::Twbx => dir.join(format!("{stem}.twbx")),
+        Format::Pbit => dir.join(format!("{stem}.pbit")),
+        _ => dir.join(format!("{stem}_pbip")),
+    };
+    let exported =
+        dv_interop::export(report, Path::new(""), format, &out).map_err(interop_error)?;
+    Ok(ExportSummary {
+        files: exported
+            .files
+            .iter()
+            .map(|f| f.display().to_string())
+            .collect(),
+        warnings: exported.warnings,
+    })
+}
+
+/// A Tableau or Power BI file converted to a `.dvz` report and opened.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ImportedReport {
+    pub opened: OpenedReport,
+    /// What could not be converted, one sentence each.
+    pub warnings: Vec<String>,
+}
+
+/// A path for `<stem>.dvz` in `dir` that does not exist yet.
+fn free_report_path(dir: &Path, stem: &str) -> PathBuf {
+    let first = dir.join(format!("{stem}.dvz"));
+    if !first.exists() {
+        return first;
+    }
+    (2..)
+        .map(|n| dir.join(format!("{stem} ({n}).dvz")))
+        .find(|p| !p.exists())
+        .expect("an unused name exists")
+}
+
+/// Converts a Tableau or Power BI file into a `.dvz` saved next to it (under a new name
+/// if one exists), then opens that report. Data files inside a packaged workbook are
+/// unpacked next to the report.
+pub fn import_report(path: &Path) -> Result<(Engine, ImportedReport), ApiError> {
+    let dir = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    let checker = Engine::new()?;
+    let check = |field: &str, expression: &str| {
+        checker
+            .check_calculated_expression(field, expression)
+            .map_err(|e| e.to_string())
+    };
+    let options = dv_interop::ImportOptions {
+        check_expression: Some(&check),
+    };
+    let imported = dv_interop::import(path, &dir, &options).map_err(interop_error)?;
+    let stem = path.file_stem().map_or_else(
+        || "imported".to_string(),
+        |s| s.to_string_lossy().into_owned(),
+    );
+    let target = free_report_path(&dir, &stem);
+    imported.report.save(&target)?;
+    let (engine, opened) = open_report(&target).map_err(|e| {
+        ApiError::new(
+            "invalid",
+            format!(
+                "The file was converted and saved as {}, but it cannot be opened yet: {}",
+                target.display(),
+                e.message
+            ),
+        )
+    })?;
+    Ok((
+        engine,
+        ImportedReport {
+            opened,
+            warnings: imported.warnings,
+        },
+    ))
 }
 
 #[cfg(test)]

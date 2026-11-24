@@ -15,6 +15,7 @@ dv-core = { path = "../dv-core" }
 dv-engine = { path = "../dv-engine" }
 dv-render = { path = "../dv-render" }
 dv-publish = { path = "../dv-publish" }
+dv-interop = { path = "../dv-interop" }
 clap.workspace = true
 serde_json.workspace = true
 duckdb.workspace = true

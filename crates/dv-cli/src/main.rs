@@ -12,6 +12,7 @@
 //! * 6 publish or network problem: missing or inconsistent credentials, feature not
 //!   compiled in, upload refused or interrupted, or the server cannot listen
 
+mod interop_cmd;
 mod pipeline;
 mod publish_cmd;
 mod serve_cmd;
@@ -34,6 +35,7 @@ use dv_engine::sql::quote_ident;
 use dv_engine::{Engine, EngineError, OutputFormat};
 use serde_json::{Map, Value, json};
 
+use interop_cmd::InteropFormat;
 use publish_cmd::PublishFormat;
 use serve_cmd::RefreshPlan;
 
@@ -59,6 +61,35 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Import a Tableau (.twb, .twbx) or Power BI (.pbit, .pbix, project folder) file as a .dvz report.
+    ///
+    /// Calculated fields, joins, parameters, charts, filters and dashboards are converted
+    /// where Davilize can express them; everything else is listed as a warning on stderr.
+    /// Data files inside a .twbx are unpacked next to the report. A .pbix keeps its data
+    /// model in a binary that cannot be read, so only its pages are imported.
+    Import {
+        /// The Tableau or Power BI file, or a Power BI Project folder.
+        file: PathBuf,
+        /// The .dvz report to write.
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Export a .dvz report as a Tableau workbook or a Power BI template or project.
+    ///
+    /// Only CSV sources are exported. Things the target cannot express (parameters,
+    /// row limits, some filters) are listed as warnings on stderr. Power BI Desktop
+    /// files (.pbix) cannot be written directly: export a .pbit or a project, open it
+    /// in Power BI Desktop and save as .pbix.
+    Export {
+        /// The .dvz report to export.
+        report: PathBuf,
+        /// Output format.
+        #[arg(long, value_enum)]
+        format: InteropFormat,
+        /// The file to write (a folder for pbip).
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Show the schema and column profile of a data file (CSV, Parquet, JSON, Arrow IPC).
     Inspect {
         /// Data file to inspect.
@@ -340,6 +371,12 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let log = Log { json: cli.json };
     let result = match cli.command {
+        Command::Import { file, out } => interop_cmd::import_file(&file, &out, &log),
+        Command::Export {
+            report,
+            format,
+            out,
+        } => interop_cmd::export_file(&report, format, &out, &log),
         Command::Inspect { file } => inspect(&file, &log),
         Command::RunSql {
             input,

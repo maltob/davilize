@@ -1,7 +1,8 @@
 import { useState } from "react";
 import type { CalculatedField, ColumnView, Dataset, Parameter, Report, Source } from "../types";
-import { SLOTS, type Slot } from "../model";
+import { SLOTS, describeJoin, type Slot } from "../model";
 import { CalculatedFieldsSection } from "./CalculatedFields";
+import { JoinsSection } from "./Joins";
 import { ParametersSection } from "./Parameters";
 import { SectionToggle, TypeBadge } from "./icons";
 
@@ -23,6 +24,11 @@ interface Props {
   /** Each resolves to an error message, or null when the change was applied. */
   onSaveCalculated: (dataset: string, field: CalculatedField, original: string | null) => Promise<string | null>;
   onDeleteCalculated: (dataset: string, name: string) => Promise<string | null>;
+  /** Each resolves to an error message, or null when the change was applied. */
+  onSaveJoined: (dataset: Dataset, original: string | null) => Promise<string | null>;
+  onDeleteJoined: (name: string) => Promise<string | null>;
+  /** The joined dataset's form was closed without saving. */
+  onCancelJoined: (name: string) => void;
   onSaveParameter: (param: Parameter, original: string | null) => void;
   onDeleteParameter: (name: string) => void;
 }
@@ -43,6 +49,9 @@ export function DataPanel({
   onAddField,
   onSaveCalculated,
   onDeleteCalculated,
+  onSaveJoined,
+  onDeleteJoined,
+  onCancelJoined,
   onSaveParameter,
   onDeleteParameter,
 }: Props) {
@@ -74,6 +83,8 @@ export function DataPanel({
               {datasets.map((dataset) => {
                 const source = sources.find((s) => s.name === dataset.source);
                 const pressed = dataset.name === active;
+                const joined = (dataset.joins ?? []).length > 0;
+                const joinText = joined ? describeJoin(dataset) : "";
                 return (
                   <li key={dataset.name}>
                     <button
@@ -84,9 +95,16 @@ export function DataPanel({
                         pressed ? "bg-accent/15 text-text" : "hover:bg-surface-2"
                       }`}
                     >
-                      <span className="truncate text-sm font-medium">{dataset.name}</span>
-                      <span className="truncate text-xs text-muted">
-                        {source?.type === "file" ? source.path.split(/[\/]/).pop() : dataset.source}
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <span className="truncate text-sm font-medium">{dataset.name}</span>
+                        {joined && (
+                          <span className="shrink-0 rounded bg-accent/15 px-1 text-xs font-semibold text-accent">
+                            joined
+                          </span>
+                        )}
+                      </span>
+                      <span className="truncate text-xs text-muted" title={joined ? joinText : undefined}>
+                        {joined ? joinText : source?.type === "file" ? source.path.split(/[\/]/).pop() : dataset.source}
                       </span>
                     </button>
                   </li>
@@ -96,6 +114,14 @@ export function DataPanel({
           )}
         </div>
       </section>
+
+      <JoinsSection
+        report={report}
+        schemas={schemas}
+        onSave={onSaveJoined}
+        onDelete={onDeleteJoined}
+        onCancelEdit={onCancelJoined}
+      />
 
       {active && (
         <>

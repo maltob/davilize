@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
-import { api, pickDataFiles, pickFolder, pickReportToOpen, pickReportToSave, toApiError } from "./api";
-import { ChartView } from "./components/ChartView";
+import {
+  api,
+  pickDataFiles,
+  pickFileToImport,
+  pickFolder,
+  pickReportToOpen,
+  pickReportToSave,
+  toApiError,
+} from "./api";
+import { ChartView, ShowTableToggle, isTableSpec } from "./components/ChartView";
 import { DashboardsPanel } from "./components/Dashboards";
 import { DataGrid } from "./components/DataGrid";
 import { DataPanel, type FieldTarget } from "./components/DataPanel";
@@ -11,19 +19,24 @@ import { Shelves } from "./components/Shelves";
 import { canRedo, canUndo, createHistory, push, redo, redoLabel, replace, undo, undoLabel, type History } from "./history";
 import { useDatasetTable, useRender } from "./hooks";
 import {
+  addJoinedDataset,
   applySlots,
   autoTitle,
   blankDashboard,
   blankVisual,
   dashboardsWithVisual,
+  datasetDependents,
   datasetOf,
+  datasetsToRefresh,
   emptySlots,
   hasFields,
   newVisualId,
   paramText,
   parameterIssues,
   pillFor,
+  removeDataset,
   replaceDashboard,
+  replaceDataset,
   requestValues,
   slotsFromVisual,
   withCalculatedField,
@@ -35,7 +48,7 @@ import {
   type Pill,
   type Slot,
 } from "./model";
-import type { ApiError, CalculatedField, ColumnView, Dashboard, Parameter, Report, Visual } from "./types";
+import type { ApiError, CalculatedField, ColumnView, Dashboard, Dataset, Parameter, Report, Visual } from "./types";
 
 const EXPORT_FORMATS = [
   { value: "html", label: "HTML page" },
@@ -43,6 +56,10 @@ const EXPORT_FORMATS = [
   { value: "csv", label: "CSV per chart" },
   { value: "png", label: "PNG image" },
   { value: "pdf", label: "PDF document" },
+  { value: "twb", label: "Tableau workbook (.twb)" },
+  { value: "twbx", label: "Tableau packaged (.twbx)" },
+  { value: "pbit", label: "Power BI template (.pbit)" },
+  { value: "pbip", label: "Power BI project folder" },
 ];
 
 type ToastTone = "info" | "success" | "error";
@@ -126,6 +143,8 @@ export default function App() {
   const [draft, setDraft] = useState<Visual | null>(null);
   const [view, setView] = useState<View>("builder");
   const [bottomTab, setBottomTab] = useState<"preview" | "profile">("preview");
+  // The builder's chart shows as a table instead of a chart.
+  const [builderTable, setBuilderTable] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [helpOpen, setHelpOpen] = useState(false);
   const nextToastId = useRef(1);
@@ -266,16 +285,63 @@ export default function App() {
    * report. A refused change (for example a bad expression) leaves everything as it was.
    */
   async function applyCalculated(dataset: string, candidate: Report, label: string): Promise<string | null> {
-    const next = datasetOf(candidate, dataset);
-    if (!next) return `Unknown dataset "${dataset}".`;
-    try {
-      const refreshed = await api.registerCalculatedFields(next);
-      changeReport(label, () => candidate);
-      setSchemas((current) => ({ ...current, [dataset]: refreshed }));
-      return null;
-    } catch (err) {
-      return toApiError(err).message;
+    if (!datasetOf(candidate, dataset)) return `Unknown dataset "${dataset}".`;
+    return applyDatasets(report, candidate, label);
+  }
+
+  /**
+   * Registers the datasets that change between `current` and `candidate`, and those built on them, then
+   * records `candidate` for undo. When the engine refuses one, the changed datasets are registered back
+   * to their current definitions and nothing is recorded.
+   */
+  async function applyDatasets(current: Report, candidate: Report, label: string): Promise<string | null> {
+    const failure = await syncDatasets(current, candidate);
+    if (failure) {
+      await syncDatasets(candidate, current);
+      return failure;
     }
+    changeReport(label, () => candidate);
+    return null;
+  }
+
+  /** Saves a joined dataset (a new one, or the one named `original`) and selects it. */
+  async function saveJoinedDataset(dataset: Dataset, original: string | null): Promise<string | null> {
+    const candidate = original === null ? addJoinedDataset(report, dataset) : replaceDataset(report, original, dataset);
+    const label = original === null ? `Add joined dataset "${dataset.name}"` : `Edit joined dataset "${dataset.name}"`;
+    const failure = await applyDatasets(report, candidate, label);
+    if (failure === null) selectDataset(dataset.name);
+    return failure;
+  }
+
+  async function deleteJoinedDataset(name: string): Promise<string | null> {
+    const used = datasetDependents(report, name);
+    if (used.length > 0) return `"${name}" is used by ${used.join(", ")}. Remove it from those first.`;
+    const wasActive = activeDataset === name;
+    const other = report.datasets.find((d) => d.name !== name)?.name;
+    changeReport(`Delete joined dataset "${name}"`, (current) => removeDataset(current, name));
+    setSchemas((current) => {
+      const next = { ...current };
+      delete next[name];
+      return next;
+    });
+    if (wasActive) {
+      if (other) selectDataset(other);
+      else {
+        setActiveDataset(null);
+        setDraft(null);
+      }
+    }
+    return null;
+  }
+
+  /** The joined dataset's form was closed without saving. The engine may hold the version checked in the form, so the saved one is registered again. */
+  function cancelJoinedEdit(name: string) {
+    const saved = report.datasets.find((d) => d.name === name);
+    if (!saved) return;
+    void api
+      .registerDataset(saved)
+      .then((columns) => setSchemas((current) => ({ ...current, [name]: columns })))
+      .catch(() => undefined);
   }
 
   function saveCalculatedField(dataset: string, field: CalculatedField, original: string | null) {
@@ -305,20 +371,36 @@ export default function App() {
   }
 
   /**
-   * After undo or redo, datasets whose calculated fields changed are re-registered
-   * with the engine so the schemas match the report again.
+   * Brings the engine and the schemas in line with `after`: datasets that were added or whose definition
+   * changed (calculated fields, joins, source) are registered again, in dependency order, along with the
+   * datasets built on them. Removed datasets lose their schema. Returns the first failure, or null.
    */
-  async function syncCalculated(before: Report, after: Report) {
-    for (const dataset of after.datasets) {
-      const previous = before.datasets.find((d) => d.name === dataset.name);
-      if (JSON.stringify(previous?.calculated_fields ?? []) === JSON.stringify(dataset.calculated_fields ?? [])) continue;
+  async function syncDatasets(before: Report, after: Report): Promise<string | null> {
+    const removed = before.datasets.map((d) => d.name).filter((name) => !after.datasets.some((d) => d.name === name));
+    if (removed.length > 0) {
+      setSchemas((current) => {
+        const next = { ...current };
+        for (const name of removed) delete next[name];
+        return next;
+      });
+    }
+    let failure: string | null = null;
+    const failed = new Set<string>();
+    for (const dataset of datasetsToRefresh(before, after)) {
+      const inputs = [dataset.source, ...(dataset.joins ?? []).map((j) => j.with)];
+      if (inputs.some((input) => failed.has(input))) {
+        failed.add(dataset.name);
+        continue;
+      }
       try {
-        const refreshed = await api.registerCalculatedFields(dataset);
+        const refreshed = await api.registerDataset(dataset);
         setSchemas((current) => ({ ...current, [dataset.name]: refreshed }));
       } catch (err) {
-        notify(toApiError(err).message, "error");
+        failed.add(dataset.name);
+        failure ??= toApiError(err).message;
       }
     }
+    return failure;
   }
 
   function stepHistory(direction: "undo" | "redo") {
@@ -332,7 +414,9 @@ export default function App() {
     if (dashboardId !== null && !next.present.dashboards?.some((d) => d.id === dashboardId)) {
       setDashboardId(null);
     }
-    void syncCalculated(before, next.present);
+    void syncDatasets(before, next.present).then((failure) => {
+      if (failure) notify(failure, "error");
+    });
   }
 
   function togglePanel() {
@@ -450,6 +534,31 @@ export default function App() {
     } catch (e) {
       notify(toApiError(e).message, "error");
     }
+  }
+
+  async function importReport() {
+    const path = await pickFileToImport();
+    if (!path) return;
+    await run("Importing", async () => {
+      const imported = await api.importReport(path);
+      const opened = imported.opened;
+      setHist(createHistory(opened.report));
+      setReportPath(opened.path);
+      setReportDirty(false);
+      setParamValues({});
+      setDashboardId(null);
+      setSchemas(Object.fromEntries(opened.datasets.map((d) => [d.name, d.columns])));
+      const first = opened.report.visuals[0];
+      const dataset = first?.dataset ?? opened.report.datasets[0]?.name ?? null;
+      setActiveDataset(dataset);
+      setDraft(first ?? (dataset ? blankVisual(dataset, newVisualId(opened.report)) : null));
+      setView("builder");
+      const skipped = imported.warnings.length;
+      const detail = skipped
+        ? ` ${skipped} item(s) could not be converted: ${imported.warnings.slice(0, 3).join("; ")}${skipped > 3 ? "; ..." : ""}`
+        : "";
+      notify(`Imported to ${opened.path}.${detail}`, skipped ? "info" : "success");
+    });
   }
 
   async function openReportAt(path: string) {
@@ -578,6 +687,15 @@ export default function App() {
           <button type="button" className={button} onClick={openReport} disabled={busy !== null}>
             Open report
           </button>
+          <button
+            type="button"
+            className={button}
+            onClick={importReport}
+            disabled={busy !== null}
+            title="Import a Tableau (.twb, .twbx) or Power BI (.pbit, .pbix) file"
+          >
+            Import...
+          </button>
           <button type="button" className={button} onClick={() => saveReport(false)} disabled={busy !== null}>
             Save
           </button>
@@ -633,6 +751,9 @@ export default function App() {
             onAddField={addField}
             onSaveCalculated={saveCalculatedField}
             onDeleteCalculated={deleteCalculatedField}
+            onSaveJoined={saveJoinedDataset}
+            onDeleteJoined={deleteJoinedDataset}
+            onCancelJoined={cancelJoinedEdit}
             onSaveParameter={saveParameter}
             onDeleteParameter={deleteParameter}
           />
@@ -660,17 +781,6 @@ export default function App() {
 
         <main id="main-content" tabIndex={-1} className="flex min-h-0 min-w-0 flex-1 flex-col focus:outline-none">
           <div className="flex items-end gap-2 border-b border-border px-3 pt-2">
-            <button
-              type="button"
-              aria-expanded={!panelCollapsed}
-              aria-controls="data-panel"
-              aria-keyshortcuts="Control+B"
-              title="Show or hide the data panel (Ctrl+B)"
-              onClick={togglePanel}
-              className="mb-1 rounded-md border border-border bg-surface px-2.5 py-1 text-sm font-medium hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-accent"
-            >
-              Data panel
-            </button>
             <div role="tablist" aria-label="Views" className="flex gap-1">
               {VIEWS.map((name) => (
                 <button
@@ -694,6 +804,21 @@ export default function App() {
                 </button>
               ))}
             </div>
+            <button
+              type="button"
+              aria-expanded={!panelCollapsed}
+              aria-controls="data-panel"
+              aria-keyshortcuts="Control+B"
+              title="Show or hide the data panel (Ctrl+B)"
+              onClick={togglePanel}
+              className="mb-1.5 ml-auto inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-sm font-medium text-muted hover:bg-surface-2 hover:text-text focus-visible:outline-2 focus-visible:outline-accent"
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="4" width="18" height="16" rx="2" />
+                <path d="M9 4v16" />
+              </svg>
+              Data panel
+            </button>
           </div>
 
           {view === "builder" ? (
@@ -794,6 +919,13 @@ export default function App() {
                     >
                       <div className="flex items-center gap-2 text-sm text-muted">
                         <span className="font-medium text-text">{draft.title || autoTitle(draft)}</span>
+                        {render.result && !isTableSpec(render.result.spec) && (
+                          <ShowTableToggle
+                            className="ml-auto"
+                            pressed={builderTable}
+                            onToggle={() => setBuilderTable((on) => !on)}
+                          />
+                        )}
                         {render.loading && (
                           <>
                             <span className="spinner" aria-hidden="true" />
@@ -820,7 +952,7 @@ export default function App() {
                       )}
                       {render.result && (
                         <>
-                          <ChartView spec={render.result.spec} label={render.result.title} />
+                          <ChartView spec={render.result.spec} label={render.result.title} showTable={builderTable} />
                           {render.result.notes.map((note) => (
                             <p key={note} className="text-xs text-muted">
                               {note}
@@ -1103,13 +1235,19 @@ function VisualCard({
   onOpen: () => void;
 }) {
   const state = useRender(visual, 0, parameters, values, blocked);
+  const [showTable, setShowTable] = useState(false);
   return (
     <article aria-label={visual.title || visual.id} className="flex min-w-0 flex-col gap-2 rounded-md border border-border bg-surface p-3">
       <div className="flex items-center justify-between gap-2">
         <h2 className="truncate text-sm font-semibold">{visual.title || visual.id}</h2>
-        <button type="button" onClick={onOpen} className="text-xs text-accent underline focus-visible:outline-2 focus-visible:outline-accent">
-          Edit
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {visual.chart !== "table" && (
+            <ShowTableToggle pressed={showTable} onToggle={() => setShowTable((on) => !on)} />
+          )}
+          <button type="button" onClick={onOpen} className="text-xs text-accent underline focus-visible:outline-2 focus-visible:outline-accent">
+            Edit
+          </button>
+        </div>
       </div>
       {state.loading && (
         <p className="flex items-center gap-2 text-sm text-muted" role="status">
@@ -1121,7 +1259,7 @@ function VisualCard({
           {state.error.message}
         </p>
       )}
-      {state.result && <ChartView spec={state.result.spec} label={state.result.title} />}
+      {state.result && <ChartView spec={state.result.spec} showTable={showTable} />}
     </article>
   );
 }

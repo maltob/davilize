@@ -10,6 +10,9 @@ import type {
   Filter,
   FilterOp,
   FilterScope,
+  Join,
+  JoinKey,
+  JoinKind,
   Limit,
   Measure,
   ParamRef,
@@ -18,7 +21,7 @@ import type {
   Report,
   Visual,
 } from "./types";
-import { GRID_LIMITS } from "./layout";
+import { GRID_LIMITS } from "./layout.ts";
 
 export type Slot = "x" | "y" | "color" | "size";
 export type PillAgg = Aggregate | "raw";
@@ -510,6 +513,153 @@ export function withoutCalculatedField(report: Report, dataset: string, name: st
 /** The dataset as it is after an edit, for re-registering it in the engine. */
 export function datasetOf(report: Report, dataset: string): Dataset | undefined {
   return report.datasets.find((d) => d.name === dataset);
+}
+
+// ---------------------------------------------------------------------------
+// Joined datasets: names, choices, building and describing a join, and which
+// datasets must be registered again after a change (see docs/reports.md, Joins)
+// ---------------------------------------------------------------------------
+
+export const JOIN_KINDS: { value: JoinKind; label: string; sql: string }[] = [
+  { value: "inner", label: "Inner - only rows that match in both", sql: "INNER" },
+  { value: "left", label: "Left - all rows from the left dataset", sql: "LEFT" },
+  { value: "right", label: "Right - all rows from the right dataset", sql: "RIGHT" },
+  { value: "full", label: "Full - all rows from both", sql: "FULL" },
+];
+
+/** A join's kind. A missing kind is inner, as in dv-core. */
+export function joinKindOf(join: Join): JoinKind {
+  return join.kind ?? "inner";
+}
+
+/** Name rules for a joined dataset: the same shape as a calculated field, and unique among sources and datasets. */
+export function joinNameError(name: string, takenNames: string[]): string | null {
+  if (name === "") return "Enter a name.";
+  if (!/^[A-Za-z0-9_-]+$/.test(name)) return "Use only letters, digits, _ or -.";
+  const key = name.toLowerCase();
+  if (takenNames.some((t) => t.toLowerCase() === key)) return `"${name}" is already a source or dataset.`;
+  return null;
+}
+
+export interface JoinableRelation {
+  name: string;
+  columns: ColumnView[];
+}
+
+/**
+ * Datasets in report order, with their columns. A join can only use datasets defined earlier,
+ * so when `before` names an existing dataset, only the ones before it are returned. Without
+ * `before` (a new dataset), all of them are.
+ */
+export function joinableRelations(
+  report: Report,
+  schemas: Record<string, ColumnView[]>,
+  before?: string,
+): JoinableRelation[] {
+  const index = before === undefined ? -1 : report.datasets.findIndex((d) => d.name === before);
+  const list = index >= 0 ? report.datasets.slice(0, index) : report.datasets;
+  return list.map((d) => ({ name: d.name, columns: schemas[d.name] ?? [] }));
+}
+
+/**
+ * Names of the datasets that read `name` (as their source or a join's `with`) and of the visuals
+ * that use it. Empty when nothing uses it, so it can be deleted.
+ */
+export function datasetDependents(report: Report, name: string): string[] {
+  const datasets = report.datasets
+    .filter((d) => d.name !== name && (d.source === name || (d.joins ?? []).some((j) => j.with === name)))
+    .map((d) => d.name);
+  const visuals = report.visuals.filter((v) => v.dataset === name).map((v) => v.title || v.id);
+  return [...datasets, ...visuals];
+}
+
+/** Checks the keys of a join: each needs a column on both sides, and no two keys are the same. */
+export function joinKeysError(keys: JoinKey[]): string | null {
+  if (keys.length === 0) return "Add at least one key.";
+  if (keys.some((k) => k.left === "" || k.right === "")) return "Choose a column on both sides of every key.";
+  const seen = new Set<string>();
+  for (const k of keys) {
+    const id = JSON.stringify([k.left, k.right]);
+    if (seen.has(id)) return "Two keys are the same. Remove one of them.";
+    seen.add(id);
+  }
+  return null;
+}
+
+/**
+ * A joined dataset: `source` is the left dataset, with one join to `right`. When editing, `base`
+ * keeps what the form does not show: later joins and calculated fields.
+ */
+export function buildJoinedDataset(
+  name: string,
+  left: string,
+  right: string,
+  kind: JoinKind,
+  keys: JoinKey[],
+  base: Dataset | null = null,
+): Dataset {
+  const join: Join = { with: right, kind, on: keys.map((k) => ({ left: k.left, right: k.right })) };
+  const next: Dataset = { name, source: left, joins: [join, ...(base?.joins ?? []).slice(1)] };
+  if (base?.calculated_fields && base.calculated_fields.length > 0) next.calculated_fields = base.calculated_fields;
+  return next;
+}
+
+/** The report with a joined dataset appended. */
+export function addJoinedDataset(report: Report, dataset: Dataset): Report {
+  return { ...report, datasets: [...report.datasets, dataset] };
+}
+
+/** The report with the dataset named `original` replaced in place (its position is kept). */
+export function replaceDataset(report: Report, original: string, dataset: Dataset): Report {
+  return { ...report, datasets: report.datasets.map((d) => (d.name === original ? dataset : d)) };
+}
+
+/** The report without the dataset named `name`. Callers check datasetDependents first. */
+export function removeDataset(report: Report, name: string): Report {
+  return { ...report, datasets: report.datasets.filter((d) => d.name !== name) };
+}
+
+/** A short description of a dataset's joins, as SQL reads: "orders LEFT JOIN regions ON region = region". */
+export function describeJoin(dataset: Dataset): string {
+  const joins = dataset.joins ?? [];
+  if (joins.length === 0) return "";
+  let text = dataset.source;
+  for (const join of joins) {
+    const sql = JOIN_KINDS.find((k) => k.value === joinKindOf(join))?.sql ?? "INNER";
+    const keys = join.on.map((k) => `${k.left} = ${k.right}`).join(" AND ");
+    text += ` ${sql} JOIN ${join.with} ON ${keys}`;
+  }
+  return text;
+}
+
+/** What the engine's registration of a dataset depends on. A change here means it must be registered again. */
+function definitionOf(d: Dataset): string {
+  return JSON.stringify({
+    source: d.source,
+    sql: d.sql ?? null,
+    joins: d.joins ?? [],
+    calculated_fields: d.calculated_fields ?? [],
+  });
+}
+
+/**
+ * The datasets to register again after a change from `before` to `after` (undo, redo, or a save):
+ * new datasets, datasets whose own definition changed, and datasets that read one of those.
+ * They come in report order, which puts every dataset after the datasets it reads.
+ */
+export function datasetsToRefresh(before: Report, after: Report): Dataset[] {
+  const previous = new Map(before.datasets.map((d) => [d.name, d]));
+  const changed = new Set<string>();
+  const out: Dataset[] = [];
+  for (const d of after.datasets) {
+    const prior = previous.get(d.name);
+    const inputs = [d.source, ...(d.joins ?? []).map((j) => j.with)];
+    if (!prior || definitionOf(prior) !== definitionOf(d) || inputs.some((i) => changed.has(i))) {
+      changed.add(d.name);
+      out.push(d);
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------

@@ -78,10 +78,33 @@ export interface CalculatedField {
   description?: string | null;
 }
 
+export type JoinKind = "inner" | "left" | "right" | "full";
+
+/** One equality condition of a join: a column of the left side, and a column of `with`. */
+export interface JoinKey {
+  left: string;
+  right: string;
+}
+
+/**
+ * Joins the rows so far (the dataset's source, then earlier joins) with `with`, a source or an
+ * earlier dataset. Output columns: all left columns, then right columns, renamed `<with>_<col>` on a clash.
+ */
+export interface Join {
+  with: string;
+  /** Omitted means inner. */
+  kind?: JoinKind;
+  /** One or more keys; all must hold. */
+  on: JoinKey[];
+}
+
 export interface Dataset {
   name: string;
+  /** A source name, or the name of an earlier dataset when `joins` is set. */
   source: string;
   sql?: string | null;
+  /** Omitted when empty. A joined dataset has no `sql`. */
+  joins?: Join[];
   /** Omitted when empty. */
   calculated_fields?: CalculatedField[];
 }
@@ -155,6 +178,13 @@ export interface OpenedReport {
   report: Report;
   path: string;
   datasets: DatasetSchema[];
+}
+
+/** A Tableau or Power BI file converted to a `.dvz` report and opened. */
+export interface ImportedReport {
+  opened: OpenedReport;
+  /** What could not be converted, one sentence each. */
+  warnings: string[];
 }
 
 export interface QueryTable {

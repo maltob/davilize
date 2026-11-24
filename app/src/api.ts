@@ -8,6 +8,7 @@ import type {
   Dataset,
   ExportSummary,
   Filter,
+  ImportedReport,
   OpenedReport,
   Parameter,
   QueryTable,
@@ -29,6 +30,8 @@ export const api = {
   addDataFiles: (existingNames: string[], paths: string[]) =>
     invoke<AddedDataset[]>("add_data_files", { existingNames, paths }),
   openReport: (path: string) => invoke<OpenedReport>("open_report", { path }),
+  /** Converts a Tableau or Power BI file to a `.dvz` saved next to it, and opens that report. */
+  importReport: (path: string) => invoke<ImportedReport>("import_report", { path }),
   saveReport: (path: string, report: Report) => invoke<Report>("save_report", { path, report }),
   previewDataset: (dataset: string, limit: number) =>
     invoke<QueryTable>("preview_dataset", { dataset, limit }),
@@ -47,6 +50,8 @@ export const api = {
   /** Re-registers a dataset's calculated fields in the open engine; returns its refreshed columns. */
   registerCalculatedFields: (dataset: Dataset) =>
     invoke<ColumnView[]>("register_calculated_fields", { dataset }),
+  /** The same command, for any dataset (joined ones included). Returns its refreshed columns, or rejects with the reason. */
+  registerDataset: (dataset: Dataset) => invoke<ColumnView[]>("register_calculated_fields", { dataset }),
   cancelQuery: () => invoke<void>("cancel_query"),
   /** Writes the bundled sample data and report to the temp folder; resolves to the report's absolute `.dvz` path. */
   createSampleReport: () => invoke<string>("create_sample_report"),
@@ -63,6 +68,17 @@ export async function pickDataFiles(): Promise<string[] | null> {
 
 export async function pickReportToOpen(): Promise<string | null> {
   const picked = await open({ multiple: false, filters: [{ name: "Davilize report", extensions: ["dvz"] }] });
+  return normalize(picked)?.[0] ?? null;
+}
+
+export const IMPORT_EXTENSIONS = ["twb", "twbx", "pbit", "pbix"];
+
+/** A Tableau workbook or a Power BI file (.pbit, .pbix). Power BI Project folders are imported with the CLI. */
+export async function pickFileToImport(): Promise<string | null> {
+  const picked = await open({
+    multiple: false,
+    filters: [{ name: "Tableau and Power BI files", extensions: IMPORT_EXTENSIONS }],
+  });
   return normalize(picked)?.[0] ?? null;
 }
 

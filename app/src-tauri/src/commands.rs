@@ -10,8 +10,8 @@ use tauri::State;
 
 use crate::error::ApiError;
 use crate::service::{
-    self, AddedDataset, ColumnView, ExportFormat, ExportSummary, OpenedReport, QueryTable,
-    RenderedVisual,
+    self, AddedDataset, ColumnView, ExportFormat, ExportSummary, ImportedReport, OpenedReport,
+    QueryTable, RenderedVisual,
 };
 use crate::state::AppState;
 
@@ -53,6 +53,19 @@ pub async fn open_report(state: Shared<'_>, path: String) -> Result<OpenedReport
         let (engine, opened) = service::open_report(Path::new(&path))?;
         state.replace_engine(engine)?;
         Ok(opened)
+    })
+    .await
+}
+
+/// Converts a Tableau (.twb, .twbx) or Power BI (.pbit, .pbix, project folder) file
+/// to a `.dvz` saved next to it, then opens it like `open_report` does.
+#[tauri::command]
+pub async fn import_report(state: Shared<'_>, path: String) -> Result<ImportedReport, ApiError> {
+    let state = state.inner().clone();
+    blocking(move || {
+        let (engine, imported) = service::import_report(Path::new(&path))?;
+        state.replace_engine(engine)?;
+        Ok(imported)
     })
     .await
 }

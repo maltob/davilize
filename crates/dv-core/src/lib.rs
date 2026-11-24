@@ -16,7 +16,7 @@ pub use model::{
     Aggregate, CalculatedField, ChartType, DASHBOARD_DEFAULT_COLUMNS, DASHBOARD_DEFAULT_ROW_HEIGHT,
     DASHBOARD_MAX_COLUMNS, DASHBOARD_MAX_ROW_HEIGHT, DASHBOARD_MIN_COLUMNS,
     DASHBOARD_MIN_ROW_HEIGHT, Dashboard, DashboardItem, Dataset, DbKind, Encodings, FileFormat,
-    Filter, FilterOp, FilterScope, Limit, Measure, ParamRef, ParamType, Parameter, REPORT_VERSION,
-    Report, Sort, SortDirection, Source, SourceKind, Visual,
+    Filter, FilterOp, FilterScope, Join, JoinKey, JoinKind, Limit, Measure, ParamRef, ParamType,
+    Parameter, REPORT_VERSION, Report, Sort, SortDirection, Source, SourceKind, Visual,
 };
 pub use params::{ParamValues, bind_visual, param_ref, parse_date, resolve_parameters};

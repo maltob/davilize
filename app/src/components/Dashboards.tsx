@@ -38,7 +38,7 @@ import type {
   Visual,
   Filter,
 } from "../types";
-import { ChartView } from "./ChartView";
+import { ChartView, ShowTableToggle } from "./ChartView";
 import { FilterEditor } from "./FilterEditor";
 
 /** Controls and buttons are at least 28px tall; text is at least 12px. */
@@ -50,8 +50,8 @@ const smallButton =
   "min-h-7 rounded-md border border-border px-2 py-0.5 text-xs hover:bg-surface-2 disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent";
 const label = "text-xs font-semibold uppercase tracking-wide text-muted";
 
-/** Space under a chart inside its card: the card padding and the "Show as table" row. */
-const CARD_CHROME_PX = 52;
+/** Space around a chart inside its card body: the body's padding, top and bottom. */
+const CARD_CHROME_PX = 16;
 /** Lowest and highest row a visual can be placed on from the position fields. */
 const ROW_LIMIT = 200;
 const KEY_HELP =
@@ -323,6 +323,8 @@ function DashboardEditor({
   const [addChoice, setAddChoice] = useState<string | null>(null);
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
   const [selectedVisual, setSelectedVisual] = useState<string | null>(null);
+  // Cards shown as a table instead of a chart, by visual id.
+  const [tableCards, setTableCards] = useState<Record<string, boolean>>({});
   const addRef = useRef<HTMLSelectElement>(null);
 
   const setGesture = (next: Gesture | null) => {
@@ -723,6 +725,14 @@ function DashboardEditor({
                     <h3 className="min-w-0 flex-1 truncate text-sm font-semibold" title={title}>
                       {title}
                     </h3>
+                    {!removing && visual.chart !== "table" && (
+                      <ShowTableToggle
+                        pressed={tableCards[item.visual] === true}
+                        onToggle={() =>
+                          setTableCards((cards) => ({ ...cards, [item.visual]: cards[item.visual] !== true }))
+                        }
+                      />
+                    )}
                     {editing &&
                       (removing ? (
                         <span role="group" aria-label={`Confirm removal of ${title}`} className="flex items-center gap-1 text-xs">
@@ -771,6 +781,7 @@ function DashboardEditor({
                     values={values}
                     blocked={blocked}
                     filters={filters}
+                    showTable={tableCards[item.visual] === true}
                     fallbackHeight={Math.max(72, Math.floor(box.height - CARD_CHROME_PX))}
                   />
                   {editing && (
@@ -1089,6 +1100,7 @@ function CardBody({
   values,
   blocked,
   filters,
+  showTable,
   fallbackHeight,
 }: {
   visual: Visual;
@@ -1096,19 +1108,21 @@ function CardBody({
   values: Record<string, string>;
   blocked: boolean;
   filters: Filter[];
+  showTable: boolean;
   fallbackHeight: number;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const measured = useElementHeight(ref);
   const height = measured > 0 ? Math.max(72, measured - CARD_CHROME_PX) : fallbackHeight;
   return (
-    <div ref={ref} className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-2">
+    <div ref={ref} className="flex min-h-0 flex-1 flex-col overflow-hidden p-2">
       <CardPreview
         visual={visual}
         parameters={parameters}
         values={values}
         blocked={blocked}
         filters={filters}
+        showTable={showTable}
         height={height}
       />
     </div>
@@ -1122,6 +1136,7 @@ function CardPreview({
   values,
   blocked,
   filters,
+  showTable,
   height,
 }: {
   visual: Visual;
@@ -1129,6 +1144,7 @@ function CardPreview({
   values: Record<string, string>;
   blocked: boolean;
   filters: Filter[];
+  showTable: boolean;
   height: number;
 }) {
   const state = useRender(visual, 0, parameters, values, blocked, filters);
@@ -1136,7 +1152,8 @@ function CardPreview({
     () => (state.result ? fitToCard(state.result.spec, height) : null),
     [state.result, height],
   );
-  if (spec && state.result) return <ChartView spec={spec} label={state.result.title} />;
+  // No caption: the card's heading already shows the visual's title.
+  if (spec) return <ChartView spec={spec} showTable={showTable} />;
   if (state.error && state.error.kind !== "cancelled") {
     return (
       <p role="alert" className="break-words text-sm text-danger">

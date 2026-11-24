@@ -33,6 +33,21 @@ pub const SHAPES: [&str; 8] = [
     "triangle-left",
 ];
 
+/// Series with a colour index past the palette reuse the palette colours (colour is
+/// `index % 8`), so their shape must change to stay distinct. The shape moves on one
+/// step for each cycle of the palette: shape is `(index % 8 + index / 8) % 8`. Every
+/// (colour, shape) pair is then unique for the first 64 series.
+pub fn series_shape(index: usize) -> &'static str {
+    SHAPES[(index % 8 + index / 8) % 8]
+}
+
+/// The shape range for a Vega-Lite ordinal scale over series: `series_shape` for the
+/// first 64 series. Vega-Lite assigns shapes by series position, so this keeps the
+/// colour and shape of each series in step with the palette.
+pub fn shape_range() -> Vec<&'static str> {
+    (0..64).map(series_shape).collect()
+}
+
 /// Font stack shared with the app's CSS.
 pub const FONT: &str = "system-ui, -apple-system, \"Segoe UI\", Roboto, sans-serif";
 
@@ -89,6 +104,27 @@ mod tests {
         shapes.sort_unstable();
         shapes.dedup();
         assert_eq!(shapes.len(), SHAPES.len());
+    }
+
+    #[test]
+    fn series_past_the_palette_reuse_colours_with_another_shape() {
+        // The first cycle is the base shapes, in order.
+        for (i, shape) in SHAPES.iter().enumerate() {
+            assert_eq!(series_shape(i), *shape);
+        }
+        // Series 8 has colour 0 again, but not the shape of series 0.
+        assert_eq!(series_shape(0), "circle");
+        assert_eq!(series_shape(8), "square");
+        assert_ne!(series_shape(0), series_shape(8));
+        // Across 64 series every (colour, shape) pair is unique, so no two series match.
+        let mut pairs: Vec<(usize, &str)> = (0..64).map(|i| (i % 8, series_shape(i))).collect();
+        pairs.sort_unstable();
+        pairs.dedup();
+        assert_eq!(pairs.len(), 64);
+        // The range covers those 64 series, in order.
+        let range = shape_range();
+        assert_eq!(range.len(), 64);
+        assert_eq!(range[9], series_shape(9));
     }
 
     #[test]

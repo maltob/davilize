@@ -22,16 +22,54 @@ function readColours(): ChartColours {
   };
 }
 
+/** Whether a spec is a table chart. A table chart is always shown as a table. */
+export function isTableSpec(spec: Record<string, unknown>): boolean {
+  return readSpec(spec).kind === "table";
+}
+
 /**
- * Draws a Vega-Lite spec produced by dv-render, named by a text summary of its data.
- * "Show as table" swaps the chart for an HTML table of the same values. A table chart
- * is always shown as a table.
+ * The "Show as table" switch. It is small and sits in a chart's header row, so the
+ * owner of the chart renders it and holds its state.
  */
-export function ChartView({ spec, label }: { spec: Record<string, unknown>; label: string }) {
+export function ShowTableToggle({
+  pressed,
+  onToggle,
+  className = "",
+}: {
+  pressed: boolean;
+  onToggle: () => void;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={pressed}
+      onClick={onToggle}
+      className={`min-h-7 shrink-0 rounded border border-border bg-surface px-2 text-xs font-medium text-text hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${className}`}
+    >
+      Show as table
+    </button>
+  );
+}
+
+/**
+ * Draws a Vega-Lite spec produced by dv-render. With `showTable`, the chart is swapped
+ * for an HTML table of the same values. A table chart is always shown as a table.
+ * `label`, when given, is a caption above the table; leave it out where the page
+ * already shows the chart's title.
+ */
+export function ChartView({
+  spec,
+  label,
+  showTable = false,
+}: {
+  spec: Record<string, unknown>;
+  label?: string;
+  showTable?: boolean;
+}) {
   const host = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showTable, setShowTable] = useState(false);
-  const isTable = useMemo(() => readSpec(spec).kind === "table", [spec]);
+  const isTable = useMemo(() => isTableSpec(spec), [spec]);
   const summary = useMemo(() => chartSummary(spec), [spec]);
   const drawn = !isTable && !showTable;
 
@@ -58,18 +96,6 @@ export function ChartView({ spec, label }: { spec: Record<string, unknown>; labe
 
   return (
     <div className="flex flex-col gap-2">
-      {!isTable && (
-        <div className="flex justify-end">
-          <button
-            type="button"
-            aria-pressed={showTable}
-            onClick={() => setShowTable((on) => !on)}
-            className="min-h-7 rounded border border-border bg-surface px-2.5 text-xs font-medium text-text hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-          >
-            Show as table
-          </button>
-        </div>
-      )}
       {drawn ? (
         <div ref={host} role="img" aria-label={summary} className="chart-host overflow-x-auto" />
       ) : (
@@ -80,14 +106,14 @@ export function ChartView({ spec, label }: { spec: Record<string, unknown>; labe
   );
 }
 
-/** The values of a chart as an HTML table: a caption, sticky headers, zebra rows and right-aligned numbers. */
-function DataTable({ spec, caption }: { spec: Record<string, unknown>; caption: string }) {
+/** The values of a chart as an HTML table: an optional caption, sticky headers, zebra rows and right-aligned numbers. */
+function DataTable({ spec, caption }: { spec: Record<string, unknown>; caption?: string }) {
   const table = useMemo(() => chartTable(spec), [spec]);
   return (
     <div className="flex flex-col gap-1">
       <div className="max-h-96 overflow-auto rounded border border-border">
         <table className="w-full border-collapse text-sm text-text">
-          <caption className="caption-top px-2 py-1.5 text-left text-sm font-medium">{caption}</caption>
+          {caption && <caption className="caption-top px-2 py-1.5 text-left text-sm font-medium">{caption}</caption>}
           <thead>
             <tr>
               {table.columns.map((column, index) => (

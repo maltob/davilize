@@ -53,6 +53,7 @@ fn dataset_with(name: &str, source: &str, fields: Vec<CalculatedField>) -> Datas
         name: name.into(),
         source: source.into(),
         sql: None,
+        joins: Vec::new(),
         calculated_fields: fields,
     }
 }
@@ -131,6 +132,7 @@ fn calculated_fields_layer_over_dataset_sql_and_appear_in_profile() {
         name: "big_orders".into(),
         source: "raw".into(),
         sql: Some("SELECT * FROM raw WHERE units >= 5".into()),
+        joins: Vec::new(),
         calculated_fields: vec![calc("per_unit", "revenue / units")],
     });
     let engine = Engine::new().unwrap();

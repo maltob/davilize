@@ -8,6 +8,7 @@ Status: early (version 0.1). It works end to end on the paths listed below, but 
 
 - **Reads data** from CSV, Parquet, Arrow IPC and JSON files, and from SQLite and PostgreSQL databases. Queries run in an embedded DuckDB, which spills to disk, so data larger than memory is fine. Aggregation is pushed down to SQL.
 - **Designs reports** in the app: pick fields, drop them on shelves, and get a bar, line, scatter, table or heatmap chart. Add filters (on rows or on aggregates), calculated fields and typed parameters.
+- **Joins datasets** on matching columns, as inner, left, right or full joins, in the app or in the report file. A joined dataset can join others, and fields and charts use it like any other dataset.
 - **Lays out dashboards** on a grid, with drag and keyboard editing and filters shared across visuals.
 - **Exports** to HTML (interactive, optionally fully offline), SVG, PNG, PDF, CSV, Parquet and XLSX.
 - **Publishes** a refreshed report to a folder, S3 (or S3-compatible storage) or SFTP, and can serve a folder over HTTP.
@@ -55,6 +56,7 @@ Exit codes: `0` ok, `2` usage, `3` input, `4` query or spec, `5` output, `6` pub
 
 - [Report files, datasets, filters, parameters and dashboards](docs/reports.md)
 - [Publishing targets, credentials and the built-in server](docs/publishing.md)
+- [Tableau and Power BI import and export](docs/interop.md)
 
 ## Layout
 
@@ -89,7 +91,7 @@ Verified: the Rust test suite, the CLI, HTML export and the desktop app on Windo
 
 Not yet verified: publishing to a real S3 service or a live SFTP server, the app on macOS and Linux, PostgreSQL against a live server, and the CI workflow (it has not run). There are no installers yet.
 
-Not built yet: joins in the UI, a scheduler, multi-user features, a Python bridge, and more connectors (MySQL, Snowflake, BigQuery, Azure Blob, GCS).
+Not built yet: a scheduler, multi-user features, a Python bridge, and more connectors (MySQL, Snowflake, BigQuery, Azure Blob, GCS).
 
 ## License
 

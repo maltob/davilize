@@ -848,3 +848,45 @@ fn html_export_with_dashboards_draws_the_grid_and_applies_filters() {
     assert!(!plain.contains("dash-grid"));
     assert!(plain.contains("<h2>Revenue by region</h2>"));
 }
+
+#[test]
+fn exports_to_tableau_and_power_bi_and_imports_them_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let (engine, added) = engine_with_sales(dir.path());
+    let mut report = Report::new("Sales");
+    report.sources.push(added.source);
+    report.datasets.push(added.dataset);
+    report.visuals.push(revenue_by_region());
+    let out = dir.path().join("out");
+
+    for (format, name) in [
+        (ExportFormat::Twb, "Sales.twb"),
+        (ExportFormat::Twbx, "Sales.twbx"),
+        (ExportFormat::Pbit, "Sales.pbit"),
+        (ExportFormat::Pbip, "Sales_pbip"),
+    ] {
+        let summary = export_report(&engine, &report, format, &out, &BTreeMap::new()).unwrap();
+        assert!(!summary.files.is_empty());
+        assert!(out.join(name).exists(), "{name}");
+    }
+    assert_eq!(ExportFormat::parse("pbip").unwrap(), ExportFormat::Pbip);
+
+    // Import the Tableau workbook: a new report is saved next to it and opened.
+    let (_engine, imported) = import_report(&out.join("Sales.twb")).unwrap();
+    assert_eq!(imported.opened.report.visuals.len(), 1);
+    assert!(out.join("Sales.dvz").exists());
+    assert!(!imported.opened.datasets.is_empty());
+
+    // A second import does not overwrite the first.
+    let (_engine, again) = import_report(&out.join("Sales.twb")).unwrap();
+    assert!(again.opened.path.ends_with("Sales (2).dvz"));
+}
+
+#[test]
+fn importing_an_unknown_file_is_an_invalid_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("x.txt");
+    fs::write(&file, "nothing").unwrap();
+    let err = import_report(&file).map(|_| ()).unwrap_err();
+    assert_eq!(err.kind, "invalid");
+}

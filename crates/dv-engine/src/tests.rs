@@ -164,6 +164,7 @@ fn database_source_with_sql_dataset_queries_a_table() {
             name: "big_orders".into(),
             source: "wh".into(),
             sql: Some(r#"SELECT * FROM "wh"."orders" WHERE units >= 5"#.into()),
+            joins: Vec::new(),
             calculated_fields: vec![],
         })
         .unwrap();
@@ -188,6 +189,7 @@ fn database_dataset_without_sql_is_rejected_with_a_clear_message() {
             name: "all".into(),
             source: "wh".into(),
             sql: None,
+            joins: Vec::new(),
             calculated_fields: vec![],
         })
         .unwrap_err();
@@ -438,6 +440,7 @@ fn dataset_sql_becomes_a_view() {
         name: "big_orders".into(),
         source: "raw".into(),
         sql: Some("SELECT * FROM raw WHERE units >= 5".into()),
+        joins: Vec::new(),
         calculated_fields: vec![],
     });
     let engine = Engine::new().unwrap();

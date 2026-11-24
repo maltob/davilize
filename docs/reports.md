@@ -30,12 +30,34 @@ Names (sources, datasets, visual ids, parameters, calculated fields) use only le
 
 ## Datasets
 
-A dataset is a named relation over one source. Without `sql` it exposes the whole source. With `sql` it is the result of that query.
+A dataset is a named relation over one source. Without `sql` or `joins` it exposes the whole source. With `sql` it is the result of that query. With `joins` it is the source joined to other relations (see Joins below).
 
 ```json
 { "name": "sales", "source": "sales_csv", "sql": "SELECT * FROM sales_csv WHERE units > 0",
   "calculated_fields": [ ... ] }
 ```
+
+### Joins
+
+A dataset can join its source to other relations. `joins` is a list, applied in order. Each join combines the rows so far (the left side) with `with`, a source or an earlier dataset in the report.
+
+```json
+{ "name": "sales_managed", "source": "sales_csv",
+  "joins": [
+    { "with": "regions", "kind": "left",
+      "on": [ { "left": "region", "right": "region" } ] }
+  ] }
+```
+
+- `with`: the right-hand relation. A dataset's `source` and a join's `with` may name any source or any dataset defined earlier in the list. A later dataset, or the dataset itself, is refused.
+- `kind`: `inner` (the default), `left`, `right`, or `full`. Unmatched rows on the other side are kept, with NULL for the columns that have no match.
+- `on`: one or more equality conditions, all of which must hold. `left` names a column of the left side (the source, or the result of earlier joins). `right` names a column of `with`. Column names match case-insensitively. A missing column is an error that names the dataset and the column.
+- Column names: left columns keep their names. A right column whose name collides with an existing column (ignoring case) is renamed `<with>_<column>`, and `_2`, `_3`, ... are added if that is taken too. For example, joining `regions` (`region`, `manager`) onto sales with a `region` column gives `regions_region` and `manager`.
+- With `right` or `full`, left columns are NULL on rows that have no left match, including the join keys.
+- A joined dataset cannot also set `sql`. Database sources expose several tables, so they cannot be joined directly. Join a dataset over them instead.
+- Calculated fields apply to the joined result, as they do to any dataset.
+
+`examples/sample_joined.dvz` is a complete report that uses this join, with `examples/regions.csv` as the second source.
 
 ### Calculated fields
 

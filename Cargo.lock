@@ -1351,6 +1351,7 @@ dependencies = [
  "duckdb",
  "dv-core",
  "dv-engine",
+ "dv-interop",
  "dv-render",
  "serde",
  "serde_json",
@@ -1617,6 +1618,7 @@ dependencies = [
  "duckdb",
  "dv-core",
  "dv-engine",
+ "dv-interop",
  "dv-publish",
  "dv-render",
  "serde_json",
@@ -1643,6 +1645,18 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "dv-interop"
+version = "0.1.0"
+dependencies = [
+ "dv-core",
+ "roxmltree",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "zip",
 ]
 
 [[package]]

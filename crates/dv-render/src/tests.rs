@@ -377,6 +377,33 @@ fn dashboards_stack_in_one_column_on_phones() {
 }
 
 #[test]
+fn dashboard_table_chart_shows_its_title_once() {
+    // The card's heading is the only title: the table's Vega title is left out of the page.
+    let mut v = visual(
+        "t",
+        ChartType::Table,
+        Encodings {
+            x: None,
+            y: None,
+            color: None,
+            size: None,
+        },
+    );
+    v.title = "Unique table title".into();
+    let chart = prepare(&v, &[regions()]).unwrap();
+    let view = dashboard(vec![ChartPlacement {
+        x: 0,
+        y: 0,
+        w: 6,
+        h: 4,
+        chart,
+    }]);
+    let page = html_dashboards("Sales", &[view], &Scripts::Cdn).unwrap();
+    assert_eq!(page.matches("Unique table title").count(), 1);
+    assert!(page.contains("<h3>Unique table title</h3>"));
+}
+
+#[test]
 fn dashboard_titles_are_escaped() {
     let hostile = "<img src=x onerror=alert(1)> & \"q\" </script><script>x()</script>";
     let mut view = dashboard(vec![placed(0, 0, 12, 2, hostile)]);
@@ -695,7 +722,7 @@ fn line_series_get_marker_shapes_but_numeric_colour_does_not() {
     assert_eq!(spec["encoding"]["shape"]["field"], json!("g"));
     assert_eq!(
         spec["encoding"]["shape"]["scale"]["range"],
-        json!(crate::style::SHAPES)
+        json!(crate::style::shape_range())
     );
 
     let numeric = batch(vec![

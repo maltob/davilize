@@ -49,6 +49,8 @@ fn base(title: Value, data: Value) -> Map<String, Value> {
 
 /// Marker shape per series, so line and scatter series differ by shape as well as
 /// colour. Only category colours get shapes; a numeric colour scale keeps circles.
+/// The shape range is keyed to series position, so series past the palette keep a
+/// distinct shape (see `style::series_shape`).
 fn shape_encoding(color: &Field) -> Option<Value> {
     if !matches!(color.kind, Kind::Nominal) {
         return None;
@@ -56,7 +58,7 @@ fn shape_encoding(color: &Field) -> Option<Value> {
     Some(json!({
         "field": color.name,
         "type": "nominal",
-        "scale": {"range": crate::style::SHAPES}
+        "scale": {"range": crate::style::shape_range()}
     }))
 }
 

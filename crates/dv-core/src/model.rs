@@ -91,7 +91,7 @@ impl Report {
                 return Err(invalid(format!("duplicate name '{}'", source.name)));
             }
         }
-        for dataset in &self.datasets {
+        for (index, dataset) in self.datasets.iter().enumerate() {
             check_name("dataset", &dataset.name)?;
             if !relation_names.insert(dataset.name.as_str()) {
                 return Err(invalid(format!(
@@ -99,11 +99,11 @@ impl Report {
                     dataset.name
                 )));
             }
-            if !self.sources.iter().any(|s| s.name == dataset.source) {
-                return Err(invalid(format!(
-                    "dataset '{}' references unknown source '{}'",
-                    dataset.name, dataset.source
-                )));
+            let earlier = &self.datasets[..index];
+            self.check_relation_reference(earlier, &dataset.name, &dataset.source, false)?;
+            dataset.validate_joins()?;
+            for join in &dataset.joins {
+                self.check_relation_reference(earlier, &dataset.name, &join.with, true)?;
             }
         }
 
@@ -151,6 +151,38 @@ impl Report {
 
         check_dashboards(&self.dashboards, &visual_ids, &parameter_names)?;
         Ok(())
+    }
+}
+
+impl Report {
+    /// Checks that `reference` (a dataset's `source`, or a join's `with`) names a source
+    /// or a dataset defined earlier in the report. `earlier` holds the datasets before `owner`.
+    fn check_relation_reference(
+        &self,
+        earlier: &[Dataset],
+        owner: &str,
+        reference: &str,
+        in_join: bool,
+    ) -> Result<(), CoreError> {
+        if self.sources.iter().any(|s| s.name == reference)
+            || earlier.iter().any(|d| d.name == reference)
+        {
+            return Ok(());
+        }
+        let context = if in_join { " in a join" } else { "" };
+        if reference == owner {
+            return Err(invalid(format!(
+                "dataset '{owner}' references itself{context}"
+            )));
+        }
+        if self.datasets.iter().any(|d| d.name == reference) {
+            return Err(invalid(format!(
+                "dataset '{owner}' references dataset '{reference}'{context}, which is defined later; a dataset may only use sources or earlier datasets"
+            )));
+        }
+        Err(invalid(format!(
+            "dataset '{owner}' references unknown source '{reference}'{context}"
+        )))
     }
 }
 
@@ -307,15 +339,19 @@ pub enum DbKind {
     Postgres,
 }
 
-/// A named relation. Without `sql` it exposes the whole source; with `sql` it
-/// is the result of that query over the source. Calculated fields add columns
-/// computed from the relation's columns.
+/// A named relation. Without `sql` or `joins` it exposes the whole source; with `sql`
+/// it is the result of that query over the source; with `joins` it is the source joined
+/// to other relations. Calculated fields add columns computed from the relation's columns.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Dataset {
     pub name: String,
+    /// A source name, or the name of an earlier dataset.
     pub source: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sql: Option<String>,
+    /// Joins applied in order to `source`. Cannot be combined with `sql`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub joins: Vec<Join>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub calculated_fields: Vec<CalculatedField>,
 }
@@ -342,6 +378,70 @@ impl Dataset {
         }
         Ok(())
     }
+}
+
+impl Dataset {
+    /// Checks join shape: no `sql` alongside `joins`, at least one key per join, and
+    /// non-empty key columns. The engine checks that the columns exist.
+    pub fn validate_joins(&self) -> Result<(), CoreError> {
+        if self.joins.is_empty() {
+            return Ok(());
+        }
+        if self.sql.is_some() {
+            return Err(invalid(format!(
+                "dataset '{}' sets both sql and joins; use one or the other",
+                self.name
+            )));
+        }
+        for join in &self.joins {
+            if join.on.is_empty() {
+                return Err(invalid(format!(
+                    "dataset '{}': join with '{}' needs at least one key",
+                    self.name, join.with
+                )));
+            }
+            for key in &join.on {
+                if key.left.trim().is_empty() || key.right.trim().is_empty() {
+                    return Err(invalid(format!(
+                        "dataset '{}': join with '{}' has a key with an empty column name",
+                        self.name, join.with
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A join of a dataset's source with another relation. Joins are applied in order:
+/// each one joins the result so far (the left side) with `with` (the right side).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Join {
+    /// Another source or an EARLIER dataset in the report.
+    pub with: String,
+    /// Defaults to an inner join.
+    #[serde(default)]
+    pub kind: JoinKind,
+    /// Equality conditions, all of which must hold. At least one is required.
+    pub on: Vec<JoinKey>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JoinKind {
+    #[default]
+    Inner,
+    Left,
+    Right,
+    Full,
+}
+
+/// One equality condition of a join: `left` is a column of the left side
+/// (the source and earlier joins), `right` a column of `with`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JoinKey {
+    pub left: String,
+    pub right: String,
 }
 
 /// A column computed from an expression over the dataset's columns, e.g.
@@ -667,6 +767,7 @@ mod tests {
                 name: "sales".into(),
                 source: "sales_csv".into(),
                 sql: Some("SELECT * FROM sales_csv WHERE units > 0".into()),
+                joins: Vec::new(),
                 calculated_fields: vec![CalculatedField {
                     name: "margin".into(),
                     expression: r#""revenue" - "units""#.into(),
@@ -806,7 +907,7 @@ mod tests {
     fn existing_example_files_serialise_to_the_same_json() {
         // The additive fields (scope, between, calculated fields, parameter types,
         // param limits) must not change how files written before them are stored.
-        for name in ["sample.dvz", "sample_db.dvz"] {
+        for name in ["sample.dvz", "sample_db.dvz", "sample_joined.dvz"] {
             let path = Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../examples")
                 .join(name);
@@ -954,5 +1055,137 @@ mod tests {
     fn load_reports_io_error_with_path() {
         let err = Report::load(Path::new("definitely-missing-file.dvz")).unwrap_err();
         assert!(matches!(err, CoreError::Io { .. }));
+    }
+
+    fn joined_report() -> Report {
+        let mut report = Report::new("r");
+        for (name, path) in [("sales", "sales.csv"), ("regions", "regions.csv")] {
+            report.sources.push(Source {
+                name: name.into(),
+                kind: SourceKind::File {
+                    path: PathBuf::from(path),
+                    format: FileFormat::Csv,
+                },
+            });
+        }
+        report.datasets.push(Dataset {
+            name: "managed".into(),
+            source: "sales".into(),
+            sql: None,
+            joins: vec![Join {
+                with: "regions".into(),
+                kind: JoinKind::Left,
+                on: vec![JoinKey {
+                    left: "region".into(),
+                    right: "region".into(),
+                }],
+            }],
+            calculated_fields: vec![],
+        });
+        report
+    }
+
+    fn invalid_message(report: &Report) -> String {
+        match report.validate() {
+            Err(CoreError::Invalid(message)) => message,
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn joins_round_trip_and_are_omitted_when_empty() {
+        let report = joined_report();
+        let text = report.to_json().unwrap();
+        assert!(text.contains("\"joins\""));
+        assert!(text.contains("\"kind\": \"left\""));
+        let again = Report::from_json(&text).unwrap();
+        assert_eq!(again, report);
+        assert_eq!(again.to_json().unwrap(), text);
+        assert!(!sample_report().to_json().unwrap().contains("joins"));
+    }
+
+    #[test]
+    fn join_kind_defaults_to_inner_and_uses_snake_case() {
+        let join: Join =
+            serde_json::from_str(r#"{"with": "regions", "on": [{"left": "a", "right": "b"}]}"#)
+                .unwrap();
+        assert_eq!(join.kind, JoinKind::Inner);
+        for (text, kind) in [
+            ("inner", JoinKind::Inner),
+            ("left", JoinKind::Left),
+            ("right", JoinKind::Right),
+            ("full", JoinKind::Full),
+        ] {
+            let parsed: JoinKind = serde_json::from_str(&format!("\"{text}\"")).unwrap();
+            assert_eq!(parsed, kind);
+        }
+        assert!(serde_json::from_str::<JoinKind>(r#""outer""#).is_err());
+    }
+
+    #[test]
+    fn join_with_unknown_source_is_rejected() {
+        let mut report = joined_report();
+        report.datasets[0].joins[0].with = "missing".into();
+        let message = invalid_message(&report);
+        assert!(message.contains("unknown source 'missing'"), "{message}");
+    }
+
+    #[test]
+    fn source_and_join_must_name_a_source_or_an_earlier_dataset() {
+        let mut report = joined_report();
+        report.datasets[0].joins[0].with = "later".into();
+        report.datasets.push(Dataset {
+            name: "later".into(),
+            source: "sales".into(),
+            sql: None,
+            joins: vec![],
+            calculated_fields: vec![],
+        });
+        let message = invalid_message(&report);
+        assert!(message.contains("defined later"), "{message}");
+
+        let mut report = joined_report();
+        report.datasets[0].source = "later".into();
+        report.datasets.push(Dataset {
+            name: "later".into(),
+            source: "sales".into(),
+            sql: None,
+            joins: vec![],
+            calculated_fields: vec![],
+        });
+        let message = invalid_message(&report);
+        assert!(message.contains("defined later"), "{message}");
+
+        // An earlier dataset is a valid source, including for a joined dataset.
+        let mut report = joined_report();
+        report.datasets.push(Dataset {
+            name: "derived".into(),
+            source: "managed".into(),
+            sql: None,
+            joins: vec![],
+            calculated_fields: vec![],
+        });
+        assert!(report.validate().is_ok());
+    }
+
+    #[test]
+    fn joins_cannot_be_combined_with_sql() {
+        let mut report = joined_report();
+        report.datasets[0].sql = Some("SELECT * FROM sales".into());
+        let message = invalid_message(&report);
+        assert!(message.contains("both sql and joins"), "{message}");
+    }
+
+    #[test]
+    fn join_needs_keys_with_column_names() {
+        let mut report = joined_report();
+        report.datasets[0].joins[0].on.clear();
+        let message = invalid_message(&report);
+        assert!(message.contains("at least one key"), "{message}");
+
+        let mut report = joined_report();
+        report.datasets[0].joins[0].on[0].right = "  ".into();
+        let message = invalid_message(&report);
+        assert!(message.contains("empty column name"), "{message}");
     }
 }

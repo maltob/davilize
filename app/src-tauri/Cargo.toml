@@ -21,6 +21,7 @@ tauri-build = { version = "2", features = [] }
 dv-core = { path = "../../crates/dv-core" }
 dv-engine = { path = "../../crates/dv-engine" }
 dv-render = { path = "../../crates/dv-render" }
+dv-interop = { path = "../../crates/dv-interop" }
 duckdb.workspace = true
 serde.workspace = true
 serde_json.workspace = true

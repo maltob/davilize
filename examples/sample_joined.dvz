@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "name": "Sample sales by manager",
+  "sources": [
+    {
+      "name": "sales_csv",
+      "type": "file",
+      "path": "sample.csv",
+      "format": "csv"
+    },
+    {
+      "name": "regions",
+      "type": "file",
+      "path": "regions.csv",
+      "format": "csv"
+    }
+  ],
+  "datasets": [
+    {
+      "name": "sales_managed",
+      "source": "sales_csv",
+      "joins": [
+        {
+          "with": "regions",
+          "kind": "left",
+          "on": [
+            {
+              "left": "region",
+              "right": "region"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "visuals": [
+    {
+      "id": "manager_revenue",
+      "title": "Revenue by manager",
+      "dataset": "sales_managed",
+      "chart": "bar",
+      "encodings": {
+        "x": "manager",
+        "y": "total_revenue"
+      },
+      "dimensions": [
+        "manager"
+      ],
+      "measures": [
+        {
+          "field": "revenue",
+          "agg": "sum",
+          "alias": "total_revenue"
+        }
+      ],
+      "filters": [],
+      "sort": {
+        "by": "total_revenue",
+        "direction": "desc"
+      }
+    }
+  ],
+  "parameters": []
+}

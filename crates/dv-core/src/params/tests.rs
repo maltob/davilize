@@ -307,6 +307,7 @@ fn report_validation_checks_parameter_references() {
             name: "sales".into(),
             source: "s".into(),
             sql: None,
+            joins: Vec::new(),
             calculated_fields: vec![],
         });
         report

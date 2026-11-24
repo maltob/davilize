@@ -23,6 +23,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::add_data_files,
             commands::open_report,
+            commands::import_report,
             commands::save_report,
             commands::create_sample_report,
             commands::preview_dataset,
