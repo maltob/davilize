@@ -276,7 +276,7 @@ function JoinForm({
   };
 
   const idBase = `join-${original ?? "new"}`;
-  const columnsLabel = (name: string) => (name === "" ? "the left dataset" : name);
+  const columnsLabel = (name: string, side: "left" | "right") => (name === "" ? `the ${side} dataset` : name);
 
   const updateKey = (id: number, patch: Partial<KeyDraft>) =>
     setKeys((list) => list.map((k) => (k.id === id ? { ...k, ...patch } : k)));
@@ -395,7 +395,7 @@ function JoinForm({
           {keys.map((key, index) => (
             <li key={key.id} className="flex flex-wrap items-center gap-1">
               <select
-                aria-label={`Key ${index + 1}: column of ${columnsLabel(left)}`}
+                aria-label={`Key ${index + 1}: column of ${columnsLabel(left, "left")}`}
                 value={key.left}
                 onChange={(e) => updateKey(key.id, { left: e.target.value })}
                 className={`${control} min-w-0 flex-1`}
@@ -411,7 +411,7 @@ function JoinForm({
                 =
               </span>
               <select
-                aria-label={`Key ${index + 1}: column of ${columnsLabel(right)}`}
+                aria-label={`Key ${index + 1}: column of ${columnsLabel(right, "right")}`}
                 value={key.right}
                 onChange={(e) => updateKey(key.id, { right: e.target.value })}
                 className={`${control} min-w-0 flex-1`}
