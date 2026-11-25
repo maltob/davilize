@@ -96,6 +96,19 @@ pub(crate) struct Segment {
     pub base_id: u64,
     /// `None` for the identity sequence of the row-number column.
     pub ids: Option<Vec<u32>>,
+    /// Whether any row holds the null id (2, stored as 0 in the packed words).
+    pub has_nulls: bool,
+}
+
+impl Segment {
+    /// The id that is stored as 0: the null id when the segment has nulls.
+    fn base(&self) -> u32 {
+        if self.has_nulls {
+            self.min_id - 1
+        } else {
+            self.min_id
+        }
+    }
 }
 
 /// The `.idf` file: a 16-slot run table whose first slot says "all packed",
@@ -109,8 +122,8 @@ pub(crate) fn idf(segment: &Segment) -> Vec<u8> {
     match &segment.ids {
         None => put_u8(&mut out, 0),
         Some(ids) => {
-            let (width, _) = packed_width(u64::from(segment.max_id - segment.min_id));
-            let words = pack(ids, segment.min_id, width);
+            let (width, _) = packed_width(u64::from(segment.max_id - segment.base()));
+            let words = pack(ids, segment.base(), width);
             put_u8(&mut out, words.len() as u64);
             for w in words {
                 put_u8(&mut out, w);
@@ -126,7 +139,7 @@ pub(crate) fn idfmeta(segment: &Segment) -> Vec<u8> {
     let (width, class) = if sequence {
         (0, SEQUENCE_CLASS)
     } else {
-        packed_width(u64::from(segment.max_id - segment.min_id))
+        packed_width(u64::from(segment.max_id - segment.base()))
     };
     let sub_words = if sequence {
         0
@@ -146,7 +159,8 @@ pub(crate) fn idfmeta(segment: &Segment) -> Vec<u8> {
     put_u8(&mut out, 32);
     put_u8(&mut out, if sequence { 2 } else { 4 });
     out.push(0);
-    put_u4(&mut out, 3);
+    // The id that is stored as 0: 2 (the null id) when there are nulls.
+    put_u4(&mut out, if segment.has_nulls { 2 } else { 3 });
     out.extend_from_slice(SS_OPEN);
     put_u8(&mut out, 0);
     put_u4(&mut out, segment.min_id);
@@ -154,7 +168,7 @@ pub(crate) fn idfmeta(segment: &Segment) -> Vec<u8> {
     put_u4(&mut out, segment.orig_min);
     put_s8(&mut out, -1);
     put_u8(&mut out, segment.records as u64);
-    out.push(0);
+    out.push(u8::from(segment.has_nulls));
     put_u8(&mut out, 0);
     put_u8(&mut out, u64::from(!sequence));
     out.extend_from_slice(SS_CLOSE);
@@ -339,6 +353,7 @@ mod tests {
             orig_min: 2,
             base_id: 1,
             ids: Some(ids),
+            has_nulls: false,
         };
         let idf_bytes = idf(&segment);
         assert_eq!(idf_bytes.len(), 152);
@@ -380,6 +395,7 @@ mod tests {
             orig_min: 2,
             base_id: 0,
             ids: None,
+            has_nulls: false,
         };
         assert_eq!(idf(&segment).len(), 144);
         assert_eq!(idfmeta(&segment).len(), 264);
@@ -407,6 +423,7 @@ mod tests {
             orig_min: 3,
             base_id: 1,
             ids: Some(ids),
+            has_nulls: false,
         };
         // 5-bit values, 12 per word: two words for 20 values.
         assert_eq!(idf(&segment).len(), 8 + 128 + 8 + 16);

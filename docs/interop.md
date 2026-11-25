@@ -54,7 +54,9 @@ What it stores:
   the CSV (so Refresh works);
 - the data, encoded the way the engine stores it: strings in first-appearance
   dictionaries, whole numbers, decimals and dates in sorted dictionaries, booleans as
-  0/1 (single segment, so up to 8,388,608 rows per table);
+  0/1 (single segment, so up to 8,388,608 rows per table); blank cells are real blanks
+  (a blank text cell is empty text, shown as "(Blank)"; a blank number, date or boolean is
+  the engine's null id);
 - relationships, with the hidden index table the engine builds for each, so Power BI
   uses them without any setup. A join on several keys gets a calculated key column on
   both tables (the keys joined with `|`) and one relationship on those columns;
@@ -66,11 +68,6 @@ What it stores:
 
 Limits:
 
-- **Blank cells.** A blank text cell is stored as empty text (Power BI shows it as
-  "(Blank)"). A blank number, date or boolean stops the export and names the column and
-  row: the engine rejects the segment statistics of a column that uses its reserved null
-  id however the counts are recorded, and a NaN entry in the dictionary turns sums and
-  maximums into NaN.
 - Sources that are not CSV files are skipped with a warning, as for the other formats.
 - Whole numbers and decimals go through a dictionary rather than the engine's value
   encoding, because the value encoding needs a hidden attribute hierarchy to answer

@@ -634,7 +634,7 @@ pub(crate) fn legacy_layout(pages: &[PageSpec]) -> Value {
         "id": 0,
         "resourcePackages": [],
         "sections": sections,
-        "config": "{\"version\":\"5.55\",\"themeCollection\":{\"baseTheme\":{\"name\":\"CY24SU06\"}}}",
+        "config": "{\"version\":\"5.55\",\"themeCollection\":{\"baseTheme\":{\"name\":\"CY24SU10\",\"version\":\"5.61\",\"type\":2}}}",
         "layoutOptimization": 0,
     })
 }

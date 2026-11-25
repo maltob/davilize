@@ -130,6 +130,8 @@ struct EncodedColumn {
     blank_entry: bool,
     /// The DAX expression of a calculated column.
     expression: Option<String>,
+    /// Whether any row is blank (stored as the null id, 2).
+    has_nulls: bool,
     /// The key of every data id (index = id); `None` for unused ids.
     id_keys: Vec<Option<Key>>,
     /// The key of every row.
@@ -258,24 +260,45 @@ fn encode_column(
     column: &ModelColumn,
     cells: &[&str],
 ) -> Result<EncodedColumn, InteropError> {
-    let name = column.name.clone();
     let blank = |c: &str| c.trim().is_empty();
-    // The engine has no way to store a blank number, date or boolean that this
-    // writer has found: the reserved null id fails its segment statistics and a
-    // NaN in a dictionary poisons sums and maximums. Blank text is an ordinary
-    // empty dictionary entry (see `vertipaq::string_dictionary`).
-    if column.data_type != "string"
-        && let Some(row) = cells.iter().position(|c| blank(c))
-    {
+    if column.data_type == "string" || !cells.iter().any(|c| blank(c)) {
+        return encode_dense(table, column, cells);
+    }
+    // A blank number, date or boolean is stored as the reserved null id (2),
+    // which the engine packs as 0 with the other ids shifted down by one. The
+    // dictionary is built from the non-blank cells.
+    let Some(filler) = cells.iter().find(|c| !blank(c)).copied() else {
         return Err(err(
             table,
             format!(
-                "column '{name}', row {}: blank values in {} columns are not supported in a .pbix yet",
-                row + 2,
-                column.data_type
+                "column '{}' holds only blank values, which a .pbix cannot store in a {} column",
+                column.name, column.data_type
             ),
         ));
+    };
+    let filled: Vec<&str> = cells
+        .iter()
+        .map(|c| if blank(c) { filler } else { *c })
+        .collect();
+    let mut enc = encode_dense(table, column, &filled)?;
+    for (row, cell) in cells.iter().enumerate() {
+        if blank(cell) {
+            enc.ids[row] = 2;
+            // A key that matches nothing, so blanks never join to each other.
+            enc.row_keys[row] = Key::Text(format!("\u{0}blank{row}"));
+        }
     }
+    enc.has_nulls = true;
+    Ok(enc)
+}
+
+fn encode_dense(
+    table: &str,
+    column: &ModelColumn,
+    cells: &[&str],
+) -> Result<EncodedColumn, InteropError> {
+    let name = column.name.clone();
+    let blank = |c: &str| c.trim().is_empty();
     match column.data_type.as_str() {
         "int64" | "boolean" => {
             let mut values: Vec<i64> = Vec::with_capacity(cells.len());
@@ -321,6 +344,7 @@ fn encode_column(
                 max_id,
                 blank_entry: false,
                 expression: None,
+                has_nulls: false,
                 id_keys,
                 row_keys: values.iter().map(|v| Key::Int(*v)).collect(),
                 min_text: min.to_string(),
@@ -372,6 +396,7 @@ fn encode_column(
                 max_id,
                 blank_entry: false,
                 expression: None,
+                has_nulls: false,
                 id_keys,
                 row_keys: present.iter().map(|b| Key::Real(*b)).collect(),
                 min_text: lo.to_string(),
@@ -416,6 +441,7 @@ fn encode_column(
                 max_id,
                 blank_entry,
                 expression: None,
+                has_nulls: false,
                 id_keys,
                 row_keys: values.into_iter().map(Key::Text).collect(),
                 min_text,
@@ -966,6 +992,7 @@ fn write_table(
             orig_min: if value_encoded { 3 } else { 2 },
             base_id: u64::from(!hidden),
             ids: column.map(|c| c.ids.clone()),
+            has_nulls: column.is_some_and(|c| c.has_nulls),
         };
 
         insert(
@@ -1013,7 +1040,7 @@ fn write_table(
                 ("Statistics_MinDataID", int(i64::from(min_id))),
                 ("Statistics_MaxDataID", int(i64::from(max_id))),
                 ("Statistics_OriginalMinSegmentDataID", int(2)),
-                ("Statistics_HasNulls", int(0)),
+                ("Statistics_HasNulls", int(i64::from(segment.has_nulls))),
                 ("Statistics_RLESortOrder", int(-1)),
                 ("Statistics_RowCount", int(records as i64)),
                 ("Statistics_OthersRLERuns", int(i64::from(!hidden))),
@@ -1038,7 +1065,7 @@ fn write_table(
                     2,
                     0.0,
                     2 + values.len() as i64,
-                    0,
+                    i64::from(column.is_some_and(|c| c.has_nulls)),
                     0,
                     Some(vertipaq::long_dictionary(values)),
                 ),
@@ -1061,7 +1088,7 @@ fn write_table(
                     2,
                     0.0,
                     2 + values.len() as i64,
-                    0,
+                    i64::from(column.is_some_and(|c| c.has_nulls)),
                     0,
                     Some(vertipaq::number_dictionary(values)),
                 ),
@@ -1515,16 +1542,24 @@ mod tests {
     }
 
     #[test]
-    fn blank_and_malformed_cells_are_reported_with_their_row() {
-        let blank = encode("int64", &["1", "", "3"]).unwrap_err().to_string();
-        assert!(
-            blank.contains("row 3") && blank.contains("blank"),
-            "{blank}"
-        );
-        for kind in ["double", "dateTime", "boolean"] {
-            let e = encode(kind, &["", "1"]).unwrap_err().to_string();
-            assert!(e.contains("row 2") && e.contains("blank"), "{kind}: {e}");
+    fn blank_numbers_use_the_null_id() {
+        let c = encode("int64", &["10", "", "30", " "]).unwrap();
+        assert!(c.has_nulls);
+        assert!(matches!(&c.encoding, Encoding::Longs(v) if v == &[10, 30]));
+        assert_eq!(c.ids, vec![3, 2, 4, 2]);
+        assert_eq!((c.min_id, c.max_id, c.distinct), (3, 4, 2));
+        for (kind, value) in [("double", "1.5"), ("dateTime", "2024-01-01")] {
+            let c = encode(kind, &["", value]).unwrap();
+            assert!(c.has_nulls && c.ids == vec![2, 3], "{kind}");
         }
+        assert!(!encode("int64", &["1", "2"]).unwrap().has_nulls);
+        // A blank never joins to another blank.
+        let c = encode("int64", &["", ""]);
+        assert!(c.is_err());
+    }
+
+    #[test]
+    fn malformed_cells_are_reported_with_their_row() {
         let bad = encode("int64", &["1", "x"]).unwrap_err().to_string();
         assert!(
             bad.contains("whole number") && bad.contains("row 3"),
