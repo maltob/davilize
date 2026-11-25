@@ -3,7 +3,6 @@ name = "davilize-app"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
-license.workspace = true
 description = "Davilize desktop app (Tauri shell over dv-engine and dv-render)"
 
 [lib]

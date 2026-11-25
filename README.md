@@ -97,6 +97,14 @@ Not yet verified: publishing to a real S3 service or a live SFTP server, the app
 
 Not built yet: multi-user features, a Python bridge, and more connectors (MySQL, Snowflake, BigQuery, Azure Blob, GCS).
 
-## License
+## Web version
 
-[Apache License 2.0](LICENSE). Unless you state otherwise, any contribution you submit for inclusion is licensed under the same terms, with no additional conditions.
+The `web/` folder is a static page that runs reports in the browser. The `dv-wasm` crate compiles `.dvz` reports to SQL with the same Rust code as the CLI, and [DuckDB-Wasm](https://github.com/duckdb/duckdb-wasm) runs the queries. It handles file sources, custom SQL, calculated fields and parameters (default values), but not joins or database sources.
+
+```powershell
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli   # same version as wasm-bindgen in Cargo.lock
+bash scripts/build-site.sh       # writes ./site
+```
+
+The `Web site` workflow builds the same folder and deploys it to GitHub Pages on every push to `main`. In the repository settings, set Pages to deploy from GitHub Actions.

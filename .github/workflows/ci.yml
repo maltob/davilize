@@ -64,3 +64,15 @@ jobs:
         run: |
           cargo run -q -p dv-cli -- run-sql examples/sample.dvz "select count(*) from sales"
           cargo run -q -p dv-cli -- refresh examples/sample.dvz --out "$RUNNER_TEMP/out" --format csv,parquet,html,xlsx
+
+  wasm:
+    name: WebAssembly
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Build dv-wasm
+        run: cargo build -p dv-wasm --target wasm32-unknown-unknown --release

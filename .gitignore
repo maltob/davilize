@@ -24,3 +24,20 @@ Thumbs.db
 
 # Generated sample data
 /examples/*.sqlite
+
+# Web site build output
+/site/
+/web/pkg/
+
+# Native bundles and release builds
+*.msi
+*.exe
+*.dmg
+*.AppImage
+*.deb
+*.rpm
+/app/src-tauri/target/
+
+# Generated outputs
+*.log
+bash.exe.stackdump

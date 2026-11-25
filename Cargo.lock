@@ -1684,6 +1684,7 @@ dependencies = [
  "arrow",
  "duckdb",
  "dv-core",
+ "dv-sql",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
@@ -1733,6 +1734,25 @@ dependencies = [
  "serde_json",
  "svg2pdf",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "dv-sql"
+version = "0.1.0"
+dependencies = [
+ "dv-core",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "dv-wasm"
+version = "0.1.0"
+dependencies = [
+ "dv-core",
+ "dv-sql",
+ "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]

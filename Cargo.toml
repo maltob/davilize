@@ -1,12 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/dv-core", "crates/dv-engine", "crates/dv-render", "crates/dv-publish", "crates/dv-interop", "crates/dv-cli", "app/src-tauri"]
+members = ["crates/dv-core", "crates/dv-sql", "crates/dv-engine", "crates/dv-render", "crates/dv-publish", "crates/dv-interop", "crates/dv-cli", "crates/dv-wasm", "app/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 publish = false
-license = "Apache-2.0"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

@@ -3,10 +3,10 @@ name = "dv-engine"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
-license.workspace = true
 
 [dependencies]
 dv-core = { path = "../dv-core" }
+dv-sql = { path = "../dv-sql" }
 arrow.workspace = true
 duckdb.workspace = true
 thiserror.workspace = true

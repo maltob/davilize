@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Davilize</title>
+<style>
+  :root { --bg:#fff; --fg:#1b1f24; --muted:#5b6570; --line:#d8dee4; --accent:#0b6bcb; --card:#f6f8fa; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f1318; --fg:#e6e9ed; --muted:#9aa5b1; --line:#2a323b; --accent:#5aa9ff; --card:#171c23; }
+  }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, sans-serif; }
+  main { max-width:960px; margin:0 auto; padding:32px 16px 64px; }
+  h1 { margin:0 0 4px; } h2 { margin-top:36px; } h3 { margin:0 0 8px; font-size:1rem; }
+  p.lead { color:var(--muted); margin-top:0; }
+  a { color:var(--accent); }
+  button { font:inherit; padding:6px 12px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--fg); cursor:pointer; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; margin:12px 0; }
+  #drop { border:2px dashed var(--line); border-radius:8px; padding:24px; text-align:center; color:var(--muted); }
+  #drop.over { border-color:var(--accent); }
+  table { border-collapse:collapse; width:100%; margin:8px 0; font-size:.9rem; }
+  th, td { text-align:left; border-bottom:1px solid var(--line); padding:4px 8px; vertical-align:top; }
+  .err { color:#c62828; } .ok { color:#2e7d32; } .note { color:var(--muted); font-size:.9rem; }
+  .chart { min-height:60px; overflow-x:auto; }
+  ul.samples { padding-left:20px; }
+  pre { white-space:pre-wrap; background:var(--bg); border:1px solid var(--line); padding:8px; border-radius:6px; font-size:.8rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Davilize</h1>
+  <p class="lead">Local-first business intelligence: reports and dashboards over your own data files.</p>
+
+  <h2>Run a report in your browser</h2>
+  <p>Pick a sample, or drop a <code>.dvz</code> report together with the data files it reads (CSV, Parquet or JSON). The report is compiled to SQL by the same Rust code as the command line tool, and the queries run in
+  <a href="https://github.com/duckdb/duckdb-wasm">DuckDB-Wasm</a>. Nothing leaves your computer.</p>
+  <p id="samples">Loading samples…</p>
+  <div id="drop" class="card">Drop a .dvz file and its data files here, or <a href="#" id="pick">choose files</a><input id="file" type="file" multiple hidden></div>
+  <p class="note">Works in the browser: file sources, custom SQL, calculated fields, parameters (default values), bar, line, scatter, heatmap and table charts. Joins and database sources need the desktop app or the CLI.</p>
+  <div id="status" class="note"></div>
+  <div id="result"></div>
+
+  <h2>Rendered samples</h2>
+  <p>HTML pages produced by <code>davilize refresh</code> from the example reports.</p>
+  <ul class="samples" id="rendered"><li>Loading…</li></ul>
+</main>
+<script type="module">
+import init, { inspect, plan } from "./pkg/dv_wasm.js";
+
+const DUCKDB = "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0";
+const VEGA = ["https://cdn.jsdelivr.net/npm/vega@6.4.0/build/vega.min.js",
+              "https://cdn.jsdelivr.net/npm/vega-lite@6.5.0/build/vega-lite.min.js",
+              "https://cdn.jsdelivr.net/npm/vega-embed@7.3.0/build/vega-embed.min.js"];
+
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+const $ = (id) => document.getElementById(id);
+const status = (t) => { $("status").textContent = t; };
+const baseName = (p) => String(p).split(/[\\/]/).pop();
+
+// ---------- sample lists ----------
+fetch("samples/index.json").then((r) => r.json()).then((list) => {
+  $("rendered").innerHTML = list.map((s) => `<li><a href="${esc(s.href)}">${esc(s.name)}</a></li>`).join("");
+}).catch(() => { $("rendered").innerHTML = "<li>No rendered samples were built.</li>"; });
+
+fetch("examples/index.json").then((r) => r.json()).then((list) => {
+  $("samples").innerHTML = "Samples: " + list.map((s, i) =>
+    `<button data-i="${i}">${esc(s.name)}</button>`).join(" ");
+  $("samples").addEventListener("click", async (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    const s = list[Number(b.dataset.i)];
+    const files = [];
+    for (const f of s.files) files.push({ name: baseName(f), data: new Uint8Array(await (await fetch("examples/" + f)).arrayBuffer()) });
+    run(files);
+  });
+}).catch(() => { $("samples").textContent = ""; });
+
+// ---------- loading libraries on demand ----------
+let dbPromise;
+async function database() {
+  dbPromise ??= (async () => {
+    const duckdb = await import(`${DUCKDB}/+esm`);
+    const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
+    const workerUrl = URL.createObjectURL(new Blob([`importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }));
+    const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING), new Worker(workerUrl));
+    await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+    URL.revokeObjectURL(workerUrl);
+    return db;
+  })();
+  return dbPromise;
+}
+let vegaPromise;
+function vega() {
+  vegaPromise ??= (async () => {
+    for (const src of VEGA) await new Promise((ok, fail) => {
+      const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = () => fail(new Error("could not load " + src));
+      document.head.appendChild(s);
+    });
+    return window.vegaEmbed;
+  })();
+  return vegaPromise;
+}
+
+// ---------- query results ----------
+const READERS = { csv: "read_csv_auto", parquet: "read_parquet", json: "read_json_auto" };
+
+function toRows(table) {
+  const fields = table.schema.fields;
+  const names = fields.map((f) => f.name);
+  const temporal = fields.map((f) => /Date|Timestamp/.test(String(f.type)));
+  const rows = [];
+  for (const row of table.toArray()) {
+    const o = {};
+    names.forEach((n, i) => {
+      let v = row[n];
+      if (typeof v === "bigint") v = Number(v);
+      if (v !== null && v !== undefined && temporal[i] && typeof v === "number") v = new Date(v).toISOString();
+      o[n] = v ?? null;
+    });
+    rows.push(o);
+  }
+  return { names, temporal, rows };
+}
+
+const kindOf = (data, name) => {
+  const i = data.names.indexOf(name);
+  if (i < 0) return "nominal";
+  if (data.temporal[i]) return "temporal";
+  const v = data.rows.find((r) => r[name] !== null)?.[name];
+  return typeof v === "number" ? "quantitative" : "nominal";
+};
+
+// A compact Vega-Lite spec for the browser. The desktop app and CLI use a fuller renderer.
+function specFor(visual, data) {
+  const e = visual.encodings || {};
+  const f = (name, extra = {}) => ({ field: name, type: kindOf(data, name), ...extra });
+  const base = { $schema: "https://vega.github.io/schema/vega-lite/v6.json", width: 560, height: 320,
+                 title: visual.title, data: { values: data.rows } };
+  const enc = {};
+  if (e.x) enc.x = f(e.x);
+  if (e.y) enc.y = f(e.y);
+  if (e.color) enc.color = f(e.color);
+  if (e.size) enc.size = f(e.size);
+  switch (visual.chart) {
+    case "bar":     return { ...base, mark: "bar", encoding: enc };
+    case "line":    return { ...base, mark: { type: "line", point: true }, encoding: enc };
+    case "scatter": return { ...base, mark: "point", encoding: enc };
+    case "heatmap": return { ...base, mark: "rect", encoding: { ...enc, color: enc.color ?? { aggregate: "count", type: "quantitative" } } };
+    default:        return null;
+  }
+}
+
+function drawTable(el, data) {
+  const head = data.names.map((n) => `<th>${esc(n)}</th>`).join("");
+  const body = data.rows.slice(0, 200).map((r) => `<tr>${data.names.map((n) => `<td>${esc(r[n])}</td>`).join("")}</tr>`).join("");
+  el.innerHTML = `<table><tr>${head}</tr>${body}</table>` + (data.rows.length > 200 ? `<p class="note">Showing 200 of ${data.rows.length} rows.</p>` : "");
+}
+
+// ---------- run a report ----------
+async function run(files) {
+  const result = $("result");
+  result.innerHTML = "";
+  try {
+    const reportFile = files.find((f) => /\.(dvz|json)$/i.test(f.name));
+    if (!reportFile) { result.innerHTML = '<div class="card err">Include a .dvz report file.</div>'; return; }
+    const text = new TextDecoder().decode(reportFile.data);
+
+    const checked = JSON.parse(inspect(text));
+    if (!checked.ok) { result.innerHTML = `<div class="card err"><b>Not valid:</b> ${esc(checked.error)}</div>`; return; }
+    const out = JSON.parse(plan(text, "{}"));
+    if (!out.ok) { result.innerHTML = `<div class="card err">${esc(out.error)}</div>`; return; }
+    const p = out.plan;
+    result.insertAdjacentHTML("beforeend", `<div class="card"><p class="ok"><b>${esc(p.name)}</b> — ${p.visuals.length} visuals</p></div>`);
+    for (const s of p.skipped) result.insertAdjacentHTML("beforeend", `<p class="note">Skipped ${esc(s.name)}: ${esc(s.reason)}.</p>`);
+
+    status("Starting DuckDB-Wasm…");
+    const db = await database();
+    const conn = await db.connect();
+    for (const f of p.files) {
+      const name = baseName(f.path);
+      const file = files.find((x) => x.name === name);
+      if (!file) { result.insertAdjacentHTML("beforeend", `<p class="err">Missing data file ${esc(name)} for source ${esc(f.source)}.</p>`); continue; }
+      const reader = READERS[f.format];
+      if (!reader) { result.insertAdjacentHTML("beforeend", `<p class="err">Source ${esc(f.source)}: ${esc(f.format)} files are not supported in the browser.</p>`); continue; }
+      await db.registerFileBuffer(name, file.data);
+      const q = (t) => `"${String(t).replace(/"/g, '""')}"`;
+      await conn.query(`CREATE OR REPLACE VIEW ${q(f.source)} AS SELECT * FROM ${reader}('${name.replace(/'/g, "''")}')`);
+    }
+    for (const sql of p.views) {
+      try { await conn.query(sql); } catch (err) { result.insertAdjacentHTML("beforeend", `<p class="err">${esc(err.message)}</p>`); }
+    }
+
+    status("Loading charts…");
+    const embed = await vega();
+    for (const v of p.visuals) {
+      const card = document.createElement("div"); card.className = "card";
+      card.innerHTML = `<h3>${esc(v.title)}</h3><div class="chart"></div>`;
+      result.appendChild(card);
+      const el = card.querySelector(".chart");
+      if (v.error) { el.innerHTML = `<span class="err">${esc(v.error)}</span>`; continue; }
+      try {
+        const data = toRows(await conn.query(v.sql));
+        const spec = specFor(v, data);
+        if (spec) await embed(el, spec, { actions: false }); else drawTable(el, data);
+      } catch (err) { el.innerHTML = `<span class="err">${esc(err.message)}</span><pre>${esc(v.sql)}</pre>`; }
+    }
+    await conn.close();
+    status("");
+  } catch (err) {
+    status("");
+    result.insertAdjacentHTML("beforeend", `<div class="card err">${esc(err.message ?? err)}</div>`);
+  }
+}
+
+async function readAll(fileList) {
+  return Promise.all([...fileList].map(async (f) => ({ name: f.name, data: new Uint8Array(await f.arrayBuffer()) })));
+}
+
+await init();
+const drop = $("drop"), input = $("file");
+$("pick").addEventListener("click", (e) => { e.preventDefault(); input.click(); });
+input.addEventListener("change", async () => run(await readAll(input.files)));
+drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", async (e) => { e.preventDefault(); drop.classList.remove("over"); run(await readAll(e.dataTransfer.files)); });
+</script>
+</body>
+</html>

@@ -39,3 +39,11 @@ pub enum EngineError {
         source: std::io::Error,
     },
 }
+
+impl From<dv_sql::SqlError> for EngineError {
+    fn from(err: dv_sql::SqlError) -> Self {
+        match err {
+            dv_sql::SqlError::InvalidSpec(message) => EngineError::InvalidSpec(message),
+        }
+    }
+}

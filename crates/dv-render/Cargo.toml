@@ -3,7 +3,6 @@ name = "dv-render"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
-license.workspace = true
 
 [dependencies]
 dv-core = { path = "../dv-core" }

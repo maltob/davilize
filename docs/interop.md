@@ -33,8 +33,7 @@ with the CLI.
 ## `.pbix`
 
 A `.pbix` keeps its data model in `DataModel`, an XPress9-compressed Analysis Services
-backup. Import decodes it (with the `ripbi-core` crate, which bundles Microsoft's MIT
-licensed XPress9 code) and reads the model metadata: tables, calculated columns, DAX
+backup. Import decodes it (with the `ripbi-core` crate) and reads the model metadata: tables, calculated columns, DAX
 measures, active relationships and the CSV file each table loads. Only the metadata is
 read, never the data. Tables loaded from anything other than a CSV file, and DAX
 calculated tables, are reported as warnings. If the model cannot be decoded, only the
