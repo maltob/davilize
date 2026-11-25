@@ -166,6 +166,28 @@ A visual placed on two dashboards is rendered once per placement, each with that
 davilize refresh examples/sample_dashboard.dvz --out out --format html --param region=South
 ```
 
+## Schedules
+
+A report can declare when it refreshes or publishes. The CLI runs the schedules (`davilize schedule`); see [scheduling.md](scheduling.md) for running them. A report without schedules omits the field.
+
+```json
+{ "name": "weekday_refresh", "cron": "30 7 * * 1-5", "action": { "type": "refresh", "out": "out" } }
+{ "name": "morning_publish", "cron": "0 6 * * *", "formats": ["html", "xlsx"],
+  "params": [ { "name": "region", "value": "South" } ],
+  "action": { "type": "publish", "target": "sftp://deploy@example.com/var/www/reports" } }
+```
+
+- `name`: unique within the report, compared case-insensitively. Same name rules as visual ids.
+- `cron`: five fields, `minute hour day-of-month month day-of-week`, in the machine's **local time**. Each field takes `*`, numbers, lists (`1,15`), ranges (`1-5`), steps (`*/15`, `1-5/2`), and month and day names (`jan`, `mon`). Day of week 0 and 7 are both Sunday. When the day-of-month and the day-of-week are both restricted (neither starts with `*`), a run happens when either one matches, as in standard cron. Six- and seven-field forms (with seconds or years) are rejected. A time that does not exist because of a daylight-saving change is skipped, and a date that never occurs (30 February) never runs.
+- `enabled`: default `true`. A disabled schedule stays in the file and does not run. It is omitted from the JSON when `true`.
+- `formats`: named as `--format` names them. For a refresh: `html`, `csv`, `parquet`, `svg`, `png`, `pdf`, `xlsx`, default `csv`. For a publish: `html`, `csv`, `parquet`, `png`, `pdf`, `xlsx`, default `html` (SVG is not published).
+- `params`: `{ "name", "value" }` pairs for declared parameters. Each value is checked with the parameter's type and constraints; parameters not listed take their defaults.
+- `action`: either `{ "type": "refresh", "out": "folder" }`, which writes the outputs into a folder, or `{ "type": "publish", "target": "..." }`, where the target is a folder, `file://`, `s3://` or `sftp://` (see [publishing.md](publishing.md)). A relative folder or local target is resolved against the report's folder.
+
+Credentials never go in a schedule. A target with a password (`user:pass@host`) is rejected. Publish credentials come from environment variables, as described in [publishing.md](publishing.md#credentials), and they must be set for the process that runs the schedule.
+
+Invalid schedules (a bad cron, a duplicate name, an undeclared or badly typed parameter, a target with a password) make the report invalid, which is exit code 3.
+
 ## CLI
 
 ```
@@ -175,6 +197,8 @@ davilize refresh <report> --out DIR --format html,svg,png,pdf,csv,parquet,xlsx
 davilize publish <report> --target <folder|sftp://...|s3://...>
 davilize serve <dir>  [--refresh <report>]
 davilize param list <report> [--json]      Show declared parameters
+davilize schedule list <report> [--count N]  Show schedules and their next run times
+davilize schedule run <report> [--name NAME] [--now]  Run schedules: as a daemon, or once with --now
 ```
 
 `refresh`, `publish`, `run-sql` and `serve --refresh` accept `--param NAME=VALUE`. In `run-sql`, each parameter is also available as a macro `param_<name>()`. See [publishing.md](publishing.md) for targets and the server.

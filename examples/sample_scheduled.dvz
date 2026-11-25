@@ -1,0 +1,144 @@
+{
+  "version": 1,
+  "name": "Sample sales",
+  "sources": [
+    {
+      "name": "sales_csv",
+      "type": "file",
+      "path": "sample.csv",
+      "format": "csv"
+    }
+  ],
+  "datasets": [
+    {
+      "name": "sales",
+      "source": "sales_csv"
+    },
+    {
+      "name": "big_orders",
+      "source": "sales_csv",
+      "sql": "SELECT * FROM sales_csv WHERE units >= 5"
+    }
+  ],
+  "visuals": [
+    {
+      "id": "revenue_by_region",
+      "title": "Revenue by region",
+      "dataset": "sales",
+      "chart": "bar",
+      "encodings": {
+        "x": "region",
+        "y": "total_revenue"
+      },
+      "dimensions": [
+        "region"
+      ],
+      "measures": [
+        {
+          "field": "revenue",
+          "agg": "sum",
+          "alias": "total_revenue"
+        }
+      ],
+      "filters": [],
+      "sort": {
+        "by": "total_revenue",
+        "direction": "desc"
+      }
+    },
+    {
+      "id": "product_region_mix",
+      "title": "Revenue by product and region",
+      "dataset": "sales",
+      "chart": "line",
+      "encodings": {
+        "x": "product",
+        "y": "total_revenue",
+        "color": "region"
+      },
+      "dimensions": [
+        "product",
+        "region"
+      ],
+      "measures": [
+        {
+          "field": "revenue",
+          "agg": "sum",
+          "alias": "total_revenue"
+        },
+        {
+          "field": "order_id",
+          "agg": "count_distinct",
+          "alias": "orders"
+        }
+      ],
+      "filters": [
+        {
+          "field": "region",
+          "op": "ne",
+          "values": [
+            "East"
+          ]
+        }
+      ],
+      "sort": {
+        "by": "total_revenue",
+        "direction": "desc"
+      }
+    },
+    {
+      "id": "units_vs_revenue",
+      "title": "Units vs revenue per order",
+      "dataset": "sales",
+      "chart": "scatter",
+      "encodings": {
+        "x": "units",
+        "y": "revenue",
+        "color": "product",
+        "size": "units"
+      },
+      "dimensions": [],
+      "measures": [],
+      "filters": []
+    },
+    {
+      "id": "customer_table",
+      "title": "Orders by customer",
+      "dataset": "big_orders",
+      "chart": "table",
+      "encodings": {},
+      "dimensions": [
+        "customer"
+      ],
+      "measures": [
+        {
+          "field": "order_id",
+          "agg": "count",
+          "alias": "orders"
+        },
+        {
+          "field": "revenue",
+          "agg": "avg",
+          "alias": "avg_revenue"
+        }
+      ],
+      "filters": [],
+      "sort": {
+        "by": "orders",
+        "direction": "desc"
+      },
+      "limit": 10
+    }
+  ],
+  "parameters": [],
+  "schedules": [
+    {
+      "name": "weekday_refresh",
+      "cron": "30 7 * * 1-5",
+      "action": {
+        "type": "refresh",
+        "out": "out"
+      }
+    }
+  ]
+}

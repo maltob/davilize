@@ -15,6 +15,7 @@
 mod interop_cmd;
 mod pipeline;
 mod publish_cmd;
+mod schedule_cmd;
 mod serve_cmd;
 
 use std::fmt::Display;
@@ -183,6 +184,11 @@ enum Command {
         #[command(subcommand)]
         command: ParamCommand,
     },
+    /// List or run a report's schedules (see docs/scheduling.md).
+    Schedule {
+        #[command(subcommand)]
+        command: ScheduleCommand,
+    },
     /// Serve a published folder over HTTP (static files, security headers).
     ///
     /// Binds to 127.0.0.1 unless --bind names another address. With --refresh,
@@ -231,6 +237,50 @@ enum ParamCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum ScheduleCommand {
+    /// List a report's schedules: name, state, cron with a plain-English reading,
+    /// action, formats and the next run times.
+    ///
+    /// With the global --json flag, prints a JSON array on stdout instead of text.
+    List {
+        /// The .dvz report.
+        report: PathBuf,
+        /// Number of next run times to show per schedule.
+        #[arg(long, default_value_t = 3)]
+        count: usize,
+    },
+    /// Run a report's schedules as a foreground daemon, or once with --now.
+    ///
+    /// Without --now, sleeps until the next due schedule, runs it, and repeats; each run
+    /// reloads the report, a failed run is logged and the daemon continues, and Ctrl+C
+    /// stops it after the current run. With --now, runs the selected schedules once and
+    /// exits with 0 when all succeed, otherwise the exit code of the first failure. Use
+    /// --now from Windows Task Scheduler or cron.
+    ///
+    /// Without --name, the enabled schedules run. With --name, the named ones run (with
+    /// --now also when disabled; the daemon runs only enabled ones).
+    Run {
+        /// The .dvz report.
+        report: PathBuf,
+        /// Run only this schedule (repeatable, case-insensitive).
+        #[arg(long = "name", value_name = "NAME")]
+        names: Vec<String>,
+        /// Run the selected schedules once and exit.
+        #[arg(long)]
+        now: bool,
+        /// SFTP: record an unknown server host key in known_hosts on first use.
+        #[arg(long)]
+        trust_new_host_key: bool,
+        /// Inline the vega libraries into HTML outputs. Requires --vendor-dir.
+        #[arg(long, requires = "vendor_dir")]
+        offline: bool,
+        /// Directory with the vendored vega, vega-lite and vega-embed UMD bundles.
+        #[arg(long, value_name = "DIR")]
+        vendor_dir: Option<PathBuf>,
+    },
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 enum ResultFormat {
     Table,
@@ -261,6 +311,7 @@ impl DataOutput {
 }
 
 /// A failure with the process exit code it maps to.
+#[derive(Debug)]
 struct CliError {
     code: u8,
     message: String,
@@ -347,6 +398,10 @@ impl Log {
         self.emit("error", message, Value::Null);
     }
 
+    fn error_with(&self, message: &str, fields: Value) {
+        self.emit("error", message, fields);
+    }
+
     fn emit(&self, level: &str, message: &str, fields: Value) {
         if self.json {
             let ts_ms = SystemTime::now()
@@ -426,6 +481,26 @@ fn main() -> ExitCode {
         }),
         Command::Param { command } => match command {
             ParamCommand::List { report } => param_list(&report, &log),
+        },
+        Command::Schedule { command } => match command {
+            ScheduleCommand::List { report, count } => schedule_cmd::list(&report, count, &log),
+            ScheduleCommand::Run {
+                report,
+                names,
+                now,
+                trust_new_host_key,
+                offline,
+                vendor_dir,
+            } => schedule_cmd::run(
+                &report,
+                &names,
+                now,
+                &schedule_cmd::RunOptions {
+                    vendor_dir: vendor_dir.filter(|_| offline),
+                    trust_new_host_key,
+                },
+                &log,
+            ),
         },
         Command::Serve {
             dir,

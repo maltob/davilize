@@ -275,6 +275,7 @@ fn join_can_follow_an_earlier_joined_dataset() {
         visuals: vec![],
         parameters: vec![],
         dashboards: vec![],
+        schedules: vec![],
     };
     for dataset in &report.datasets {
         engine.register_dataset(dataset).unwrap();

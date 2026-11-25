@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::CoreError;
+use crate::schedule::{Schedule, check_schedules};
 
 /// Current `.dvz` schema version. Files with any other version are rejected.
 pub const REPORT_VERSION: u32 = 1;
@@ -25,6 +26,10 @@ pub struct Report {
     /// these instead of every visual. Omitted from the JSON when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dashboards: Vec<Dashboard>,
+    /// Scheduled refreshes and publishes, run by `davilize schedule`. Omitted from the
+    /// JSON when empty. See docs/reports.md ("Schedules").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub schedules: Vec<Schedule>,
 }
 
 impl Report {
@@ -38,6 +43,7 @@ impl Report {
             visuals: Vec::new(),
             parameters: Vec::new(),
             dashboards: Vec::new(),
+            schedules: Vec::new(),
         }
     }
 
@@ -150,6 +156,7 @@ impl Report {
         }
 
         check_dashboards(&self.dashboards, &visual_ids, &parameter_names)?;
+        check_schedules(&self.schedules, &self.parameters)?;
         Ok(())
     }
 }
@@ -287,12 +294,12 @@ fn overlaps(a: &DashboardItem, b: &DashboardItem) -> bool {
         && by < ay + u64::from(a.h)
 }
 
-fn invalid(message: String) -> CoreError {
+pub(crate) fn invalid(message: String) -> CoreError {
     CoreError::Invalid(message)
 }
 
 /// Names must be non-empty and made of letters, digits, `_` or `-`.
-fn check_name(kind: &str, name: &str) -> Result<(), CoreError> {
+pub(crate) fn check_name(kind: &str, name: &str) -> Result<(), CoreError> {
     let ok = !name.is_empty()
         && name
             .chars()
@@ -805,6 +812,7 @@ mod tests {
             }],
             parameters: vec![Parameter::new("year", Some(serde_json::json!(2024)))],
             dashboards: Vec::new(),
+            schedules: Vec::new(),
         }
     }
 

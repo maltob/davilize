@@ -13,6 +13,7 @@ Status: early (version 0.1). It works end to end on the paths listed below, but 
 - **Exports** to HTML (interactive, optionally fully offline), SVG, PNG, PDF, CSV, Parquet and XLSX.
 - **Publishes** a refreshed report to a folder, S3 (or S3-compatible storage) or SFTP, and can serve a folder over HTTP.
 - **Refreshes from the CLI** with parameter overrides and stable exit codes, for cron or Task Scheduler.
+- **Schedules** refreshes and publishes: a cron-style schedule in the report, run by `davilize schedule run` as a daemon or once with `--now` from Task Scheduler or cron.
 
 A report is one deterministic JSON file (`.dvz`) that diffs cleanly and never holds credentials. See [docs/reports.md](docs/reports.md).
 
@@ -48,6 +49,8 @@ davilize refresh <report> --out DIR --format html,svg,png,pdf,csv,parquet,xlsx
 davilize publish <report> --target <folder|sftp://...|s3://...>
 davilize serve <dir> [--refresh <report>]
 davilize param list <report> [--json]      Show declared parameters
+davilize schedule list <report>            Show schedules and their next run times
+davilize schedule run <report> [--now]     Run schedules as a daemon, or once with --now
 ```
 
 Exit codes: `0` ok, `2` usage, `3` input, `4` query or spec, `5` output, `6` publish or network.
@@ -57,6 +60,7 @@ Exit codes: `0` ok, `2` usage, `3` input, `4` query or spec, `5` output, `6` pub
 - [Report files, datasets, filters, parameters and dashboards](docs/reports.md)
 - [Publishing targets, credentials and the built-in server](docs/publishing.md)
 - [Tableau and Power BI import and export](docs/interop.md)
+- [Running scheduled reports](docs/scheduling.md)
 
 ## Layout
 
@@ -91,7 +95,7 @@ Verified: the Rust test suite, the CLI, HTML export and the desktop app on Windo
 
 Not yet verified: publishing to a real S3 service or a live SFTP server, the app on macOS and Linux, PostgreSQL against a live server, and the CI workflow (it has not run). There are no installers yet.
 
-Not built yet: a scheduler, multi-user features, a Python bridge, and more connectors (MySQL, Snowflake, BigQuery, Azure Blob, GCS).
+Not built yet: multi-user features, a Python bridge, and more connectors (MySQL, Snowflake, BigQuery, Azure Blob, GCS).
 
 ## License
 

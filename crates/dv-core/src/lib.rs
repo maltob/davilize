@@ -9,6 +9,7 @@ mod dashboard;
 mod error;
 mod model;
 mod params;
+mod schedule;
 
 pub use dashboard::{apply_dashboard_filters, check_filter_shape};
 pub use error::CoreError;
@@ -20,3 +21,7 @@ pub use model::{
     Parameter, REPORT_VERSION, Report, Sort, SortDirection, Source, SourceKind, Visual,
 };
 pub use params::{ParamValues, bind_visual, param_ref, parse_date, resolve_parameters};
+pub use schedule::{
+    PUBLISH_SCHEDULE_FORMATS, SCHEDULE_FORMATS, Schedule, ScheduleAction, ScheduleParam,
+    check_publish_target, describe_cron,
+};
