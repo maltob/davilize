@@ -320,7 +320,19 @@ fn visual_spec(b: &mut Builder<'_>, visual: &Visual) -> Option<VisualSpec> {
             for d in &visual.dimensions {
                 put(b, "Category", &Some(d.clone()), &mut roles, &mut used);
             }
+            // With a legend, Power BI allows a single value on the chart.
+            let legend = roles.iter().any(|(r, _)| r == "Series");
             for m in &visual.measures {
+                if legend && roles.iter().any(|(r, _)| r == "Y") {
+                    if !used.contains(&m.output_name()) {
+                        b.warn(format!(
+                            "visual '{}': measure '{}' was left out because Power BI allows one value on a chart with a legend",
+                            visual.id,
+                            m.output_name()
+                        ));
+                    }
+                    continue;
+                }
                 put(b, "Y", &Some(m.output_name()), &mut roles, &mut used);
             }
             match (visual.chart, horizontal) {

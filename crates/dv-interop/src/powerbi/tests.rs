@@ -122,6 +122,19 @@ fn dashboards_and_filters_round_trip_through_a_template() {
 }
 
 #[test]
+fn a_chart_with_a_legend_keeps_one_value() {
+    // Power BI rejects several values on a chart that has a legend.
+    let t = round_trip("sample.dvz", Format::Pbit);
+    assert!(
+        t.export_warnings
+            .iter()
+            .any(|w| w.contains("product_region_mix") && w.contains("left out")),
+        "{:?}",
+        t.export_warnings
+    );
+}
+
+#[test]
 fn calculated_fields_become_calculated_columns() {
     let dir = tempfile::tempdir().unwrap();
     let mut original = load("sample.dvz");
