@@ -57,7 +57,7 @@ impl Builder<'_> {
     }
 
     /// Loads a CSV source as table columns and a query.
-    fn csv_source(&mut self, source: &str) -> Option<(Vec<ModelColumn>, Vec<String>)> {
+    fn csv_source(&mut self, source: &str) -> Option<(Vec<ModelColumn>, Vec<String>, String)> {
         let src = self.report.sources.iter().find(|s| s.name == source)?;
         let SourceKind::File { path, format } = &src.kind else {
             self.warn(format!(
@@ -84,8 +84,9 @@ impl Builder<'_> {
             ));
             return None;
         };
-        let query = csv_query(&strip_verbatim(&absolute), &columns);
-        Some((columns, query))
+        let shown = strip_verbatim(&absolute);
+        let query = csv_query(&shown, &columns);
+        Some((columns, query, shown))
     }
 
     fn add_dataset(&mut self, dataset: &Dataset) {
@@ -96,7 +97,7 @@ impl Builder<'_> {
                 return;
             }
         };
-        let Some((mut columns, query)) = self.csv_source(base) else {
+        let Some((mut columns, query, csv)) = self.csv_source(base) else {
             return;
         };
         let mut joins = Vec::new();
@@ -120,6 +121,7 @@ impl Builder<'_> {
         self.model.tables.push(ModelTable {
             name: table_name.clone(),
             columns,
+            csv_path: Some(csv),
             ..ModelTable::default()
         });
         self.queries.push((table_name.clone(), query));
@@ -143,13 +145,14 @@ impl Builder<'_> {
             let target = match self.source_tables.get(&with) {
                 Some(t) => t.clone(),
                 None => {
-                    let Some((cols, query)) = self.csv_source(&with) else {
+                    let Some((cols, query, csv)) = self.csv_source(&with) else {
                         continue;
                     };
                     let name = with.clone();
                     self.model.tables.push(ModelTable {
                         name: name.clone(),
                         columns: cols,
+                        csv_path: Some(csv),
                         ..ModelTable::default()
                     });
                     self.queries.push((name.clone(), query));
@@ -157,18 +160,23 @@ impl Builder<'_> {
                     name
                 }
             };
-            if join.on.len() > 1 {
-                self.warn(format!(
-                    "the join of '{}' with '{with}' has several keys; Power BI relationships have one, so only the first was kept",
-                    dataset.name
-                ));
-            }
-            let key = &join.on[0];
+            // Power BI relationships have one column per side: a join on several
+            // keys relates a calculated column that joins them instead.
+            let (from_column, to_column) = if join.on.len() > 1 {
+                let lefts: Vec<String> = join.on.iter().map(|k| k.left.clone()).collect();
+                let rights: Vec<String> = join.on.iter().map(|k| k.right.clone()).collect();
+                (
+                    self.add_key_column(&table_name, &lefts),
+                    self.add_key_column(&target, &rights),
+                )
+            } else {
+                (join.on[0].left.clone(), join.on[0].right.clone())
+            };
             self.model.relationships.push(ModelRelationship {
                 from_table: table_name.clone(),
-                from_column: key.left.clone(),
+                from_column,
                 to_table: target,
-                to_column: key.right.clone(),
+                to_column,
             });
             if !matches!(
                 join.kind,
@@ -180,6 +188,28 @@ impl Builder<'_> {
                 ));
             }
         }
+    }
+
+    /// Adds (once) a text column to `table` that joins the values of `sources` with a
+    /// bar, and returns its name.
+    fn add_key_column(&mut self, table: &str, sources: &[String]) -> String {
+        let name = format!("key {}", sources.join(" "));
+        if let Some(t) = self.model.tables.iter_mut().find(|t| t.name == table)
+            && !t.columns.iter().any(|c| c.name == name)
+        {
+            let dax = sources
+                .iter()
+                .map(|c| format!("[{c}]"))
+                .collect::<Vec<_>>()
+                .join(" & \"|\" & ");
+            t.columns.push(ModelColumn {
+                name: name.clone(),
+                data_type: "string".into(),
+                expression: Some(dax),
+            });
+            t.key_columns.push((name.clone(), sources.to_vec()));
+        }
+        name
     }
 
     /// The table that holds a field: the dataset's table, else one of its join targets.
@@ -670,34 +700,85 @@ pub(crate) fn export_pbit(
     report_dir: &Path,
     out: &Path,
 ) -> Result<Exported, InteropError> {
+    write_archive(report, report_dir, out, None)
+}
+
+/// A `.pbix` whose `DataModel` holds the tables with a snapshot of their CSV data.
+pub(crate) fn export_pbix(
+    report: &Report,
+    report_dir: &Path,
+    out: &Path,
+    options: &crate::ExportOptions<'_>,
+) -> Result<Exported, InteropError> {
+    write_archive(report, report_dir, out, Some(options))
+}
+
+fn write_archive(
+    report: &Report,
+    report_dir: &Path,
+    out: &Path,
+    pbix: Option<&crate::ExportOptions<'_>>,
+) -> Result<Exported, InteropError> {
     let built = build(report, report_dir);
-    let parts: Vec<(&str, String)> = vec![
-        ("Version", "1.28".to_string()),
-        (
+    let layout = serde_json::to_string(&legacy_layout(&built.pages))
+        .map_err(|e| InteropError::Format(e.to_string()))?;
+    let mut parts: Vec<(&str, Vec<u8>)> = vec![("Version", encode_utf16le("1.28"))];
+    if let Some(options) = pbix {
+        let mut values = std::collections::HashMap::new();
+        for table in &built.model.tables {
+            for column in table
+                .columns
+                .iter()
+                .filter(|c| c.expression.is_some())
+                .filter(|c| !table.key_columns.iter().any(|(n, _)| *n == c.name))
+            {
+                let Some(compute) = options.column_values else {
+                    return Err(InteropError::Format(format!(
+                        "table '{}': calculated column '{}' needs an engine to compute its values, which this export was not given",
+                        table.name, column.name
+                    )));
+                };
+                let cells = compute(&table.name, &column.name).map_err(|e| {
+                    InteropError::Format(format!(
+                        "table '{}': calculated column '{}': {e}",
+                        table.name, column.name
+                    ))
+                })?;
+                values.insert((table.name.clone(), column.name.clone()), cells);
+            }
+        }
+        parts.push((
+            "DataModel",
+            super::datamodel::data_model(&built.model, &built.queries, &report.name, &values)?,
+        ));
+    } else {
+        parts.push((
             "DataModelSchema",
-            serde_json::to_string(&schema_json(&built.model, &built.queries))
-                .map_err(|e| InteropError::Format(e.to_string()))?,
-        ),
-        (
-            "Report/Layout",
-            serde_json::to_string(&legacy_layout(&built.pages))
-                .map_err(|e| InteropError::Format(e.to_string()))?,
-        ),
-        (
-            "Metadata",
-            json!({ "Version": 5, "AutoCreatedRelationships": [], "FileDescription": report.name })
+            encode_utf16le(
+                &serde_json::to_string(&schema_json(&built.model, &built.queries))
+                    .map_err(|e| InteropError::Format(e.to_string()))?,
+            ),
+        ));
+    }
+    parts.push(("Report/Layout", encode_utf16le(&layout)));
+    parts.push((
+        "Metadata",
+        encode_utf16le(
+            &json!({ "Version": 5, "AutoCreatedRelationships": [], "FileDescription": report.name })
                 .to_string(),
         ),
-        (
-            "Settings",
-            json!({
+    ));
+    parts.push((
+        "Settings",
+        encode_utf16le(
+            &json!({
                 "Version": 4,
                 "ReportSettings": {},
                 "QueriesSettings": { "TypeDetectionEnabled": true, "RelationshipImportEnabled": true, "Version": "2.126.0" },
             })
             .to_string(),
         ),
-    ];
+    ));
     if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent).map_err(io_err(parent))?;
     }
@@ -705,6 +786,8 @@ pub(crate) fn export_pbit(
     let mut zip = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
     let archive_err = |e: zip::result::ZipError| InteropError::Archive(e.to_string());
     let mut content_types = String::from(
         "<?xml version=\"1.0\" encoding=\"utf-8\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">",
@@ -719,13 +802,24 @@ pub(crate) fn export_pbit(
         .map_err(archive_err)?;
     zip.write_all(content_types.as_bytes())
         .map_err(io_err(out))?;
-    for (name, text) in &parts {
-        zip.start_file(*name, options).map_err(archive_err)?;
-        zip.write_all(&encode_utf16le(text)).map_err(io_err(out))?;
+    for (name, bytes) in &parts {
+        let chosen = if *name == "DataModel" {
+            stored
+        } else {
+            options
+        };
+        zip.start_file(*name, chosen).map_err(archive_err)?;
+        zip.write_all(bytes).map_err(io_err(out))?;
     }
     zip.finish().map_err(archive_err)?;
+    let mut warnings = built.warnings;
+    if pbix.is_some() {
+        warnings.push(
+            "the .pbix holds a snapshot of the CSV data; refresh it in Power BI Desktop to pick up changes".into(),
+        );
+    }
     Ok(Exported {
         files: vec![out.to_path_buf()],
-        warnings: built.warnings,
+        warnings,
     })
 }

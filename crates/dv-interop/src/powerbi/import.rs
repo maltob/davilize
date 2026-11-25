@@ -12,7 +12,9 @@ use serde_json::Value;
 
 use super::layout::{pages_from_legacy, visual_from_pbir};
 use super::model::{parse_schema_json, parse_tmdl_relationships, parse_tmdl_table};
-use super::{FieldRef, Model, ModelColumn, ModelTable, PageSpec, VisualSpec, decode_text};
+use super::{
+    FieldRef, Model, ModelColumn, ModelRelationship, ModelTable, PageSpec, VisualSpec, decode_text,
+};
 use crate::expr;
 use crate::util::{UniqueNames, fit_items, sanitize, to_grid};
 use crate::{Format, ImportOptions, Imported, InteropError, io_err};
@@ -269,9 +271,12 @@ fn read_archive(
             None => warnings.push("the template has no DataModelSchema".into()),
         }
     } else {
-        warnings.push(
-            "a .pbix keeps its data model in a compressed binary that cannot be read; only the report pages were imported, and the data sources are placeholders you must point at your data".into(),
-        );
+        match read_datamodel(path, warnings) {
+            Some(m) => model = Some(m),
+            None => warnings.push(
+                "the .pbix data model could not be read; only the report pages were imported, and the data sources are placeholders you must point at your data".into(),
+            ),
+        }
     }
     Ok(Loaded {
         model,
@@ -280,10 +285,104 @@ fn read_archive(
     })
 }
 
+/// Reads the compressed `DataModel` of a `.pbix` (an XPress9 ABF backup).
+fn read_datamodel(path: &Path, warnings: &mut Vec<String>) -> Option<Model> {
+    use ripbi_core::{ColumnKind, PartitionSource};
+    let ingested = ripbi_core::ingest::semantic_model(path)
+        .map_err(|e| warnings.push(format!("the .pbix data model could not be decoded: {e}")))
+        .ok()?;
+    let db = ingested.value;
+    let mut model = Model::default();
+    for table in &db.tables {
+        if table.is_local_date_table || table.is_template_date_table || table.is_private {
+            continue;
+        }
+        if table.is_calculated() {
+            warnings.push(format!(
+                "table '{}' is a DAX calculated table and was not imported; its columns will not resolve",
+                table.name
+            ));
+            continue;
+        }
+        let mut out = ModelTable {
+            name: table.name.clone(),
+            ..ModelTable::default()
+        };
+        for column in &table.columns {
+            let expression = match &column.kind {
+                ColumnKind::Data => None,
+                ColumnKind::Calculated { expression } => Some(expression.clone()),
+                ColumnKind::CalculatedTableColumn => continue,
+            };
+            out.columns.push(ModelColumn {
+                name: column.name.clone(),
+                data_type: "string".into(),
+                expression,
+            });
+        }
+        for measure in &table.measures {
+            out.measures
+                .push((measure.name.clone(), measure.expression.clone()));
+        }
+        for partition in &table.partitions {
+            if let PartitionSource::M { expression } = &partition.source
+                && out.csv_path.is_none()
+            {
+                out.csv_path = super::model::csv_path_from_query(expression);
+            }
+        }
+        model.tables.push(out);
+    }
+    for rel in db.relationships.iter().filter(|r| r.is_active) {
+        let known = |t: &str| model.tables.iter().any(|m| m.name == t);
+        if known(&rel.from_table) && known(&rel.to_table) {
+            model.relationships.push(ModelRelationship {
+                from_table: rel.from_table.clone(),
+                from_column: rel.from_column.clone(),
+                to_table: rel.to_table.clone(),
+                to_column: rel.to_column.clone(),
+            });
+        }
+    }
+    Some(model)
+}
+
 // ------------------------------------------------------------- building
 
+/// The column names in the first line of a CSV file, when it can be read.
+fn csv_header(path: &Path) -> Vec<String> {
+    use std::io::{BufRead, BufReader};
+    let Ok(file) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let mut line = String::new();
+    if BufReader::new(file).read_line(&mut line).is_err() {
+        return Vec::new();
+    }
+    line.trim_start_matches('\u{feff}')
+        .trim_end()
+        .split(',')
+        .map(|c| c.trim().trim_matches('"').to_string())
+        .filter(|c| !c.is_empty())
+        .collect()
+}
+
+/// The table of a visual that holds its aggregated fields: the "fact" side of its query.
+fn fact_table(spec: &VisualSpec) -> Option<&str> {
+    spec.roles
+        .iter()
+        .find(|(_, f)| !matches!(f, FieldRef::Column { .. }))
+        .or_else(|| spec.roles.first())
+        .map(|(_, f)| f.table())
+}
+
 /// A model derived from what the pages use, when the file has no readable model.
-fn model_from_pages(pages: &[PageSpec]) -> Model {
+///
+/// A `.pbix` does not say how its tables relate, so relationships are guessed:
+/// a CSV named after each table, next to the file, tells us its columns, and a
+/// column name shared by a visual's fact table and another table it uses is
+/// taken as the join key.
+fn model_from_pages(pages: &[PageSpec], base: &Path) -> Model {
     let mut model = Model::default();
     for visual in pages.iter().flat_map(|p| &p.visuals) {
         for (_, field) in &visual.roles {
@@ -306,6 +405,66 @@ fn model_from_pages(pages: &[PageSpec]) -> Model {
                     name: column.clone(),
                     data_type: "string".into(),
                     expression: None,
+                });
+            }
+        }
+    }
+
+    for table in &mut model.tables {
+        let file = base.join(format!("{}.csv", table.name));
+        if file.is_file() {
+            for name in csv_header(&file) {
+                if !table.columns.iter().any(|c| c.name == name) {
+                    table.columns.push(ModelColumn {
+                        name,
+                        data_type: "string".into(),
+                        expression: None,
+                    });
+                }
+            }
+            table.csv_path = Some(format!("{}.csv", table.name));
+        }
+    }
+
+    for visual in pages.iter().flat_map(|p| &p.visuals) {
+        let Some(fact) = fact_table(visual) else {
+            continue;
+        };
+        let mut others: Vec<&str> = Vec::new();
+        for (_, f) in &visual.roles {
+            if f.table() != fact && !others.contains(&f.table()) {
+                others.push(f.table());
+            }
+        }
+        for other in others {
+            if model
+                .relationships
+                .iter()
+                .any(|r| r.from_table == fact && r.to_table == other)
+            {
+                continue;
+            }
+            let columns_of = |name: &str| -> Vec<String> {
+                model
+                    .tables
+                    .iter()
+                    .find(|t| t.name == name)
+                    .map(|t| t.columns.iter().map(|c| c.name.clone()).collect())
+                    .unwrap_or_default()
+            };
+            let theirs = columns_of(other);
+            let shared = columns_of(fact).into_iter().find_map(|c| {
+                theirs
+                    .iter()
+                    .find(|o| o.eq_ignore_ascii_case(&c))
+                    .map(|o| (c.clone(), o.clone()))
+            });
+            if let Some((from_column, to_column)) = shared {
+                model.relationships.push(ModelRelationship {
+                    from_table: fact.to_string(),
+                    from_column,
+                    to_table: other.to_string(),
+                    to_column,
                 });
             }
         }
@@ -344,7 +503,7 @@ fn build(
             if !pages.is_empty() {
                 warnings.push("the file has no readable model; tables were derived from the fields the visuals use".into());
             }
-            model_from_pages(&pages)
+            model_from_pages(&pages, &base)
         }
     };
 
@@ -596,10 +755,12 @@ fn import_visual(
         })
     };
     let root = used.iter().copied().find(|t| reaches(t)).or_else(|| {
+        let fact = fact_table(spec);
         warnings.push(format!(
-            "visual '{title}' uses tables that are not related through a relationship; only the first table's columns will resolve"
+            "visual '{title}' uses tables that are not related through a relationship; it is built on '{}' and only that table's columns will resolve until you add a join to the other tables",
+            fact.unwrap_or_default()
         ));
-        used.first().copied()
+        fact
     })?;
     let table_index = model.tables.iter().position(|t| t.name == root)?;
     let dataset = infos[table_index].dataset.clone();

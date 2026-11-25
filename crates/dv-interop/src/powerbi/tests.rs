@@ -180,29 +180,91 @@ fn a_pbix_imports_its_layout_with_placeholder_sources() {
         out.finish().unwrap();
     }
     let imported = import(&pbix, &dir.path().join("o"), &ImportOptions::default()).unwrap();
-    assert!(
-        imported
-            .warnings
-            .iter()
-            .any(|w| w.contains("compressed binary"))
-    );
+    assert!(imported.warnings.iter().any(|w| w.contains("could not be")));
     assert_eq!(imported.report.visuals.len(), 1);
     assert!(!imported.report.sources.is_empty());
     imported.report.validate().unwrap();
 }
 
 #[test]
-fn writing_a_pbix_is_refused_with_advice() {
-    let report = load("sample.dvz");
+fn a_written_pbix_reads_back_through_the_model_reader() {
+    let report = load("sample_joined.dvz");
     let dir = tempfile::tempdir().unwrap();
-    let err = export(
-        &report,
-        &examples(),
-        Format::Pbix,
-        &dir.path().join("x.pbix"),
+    let pbix = dir.path().join("x.pbix");
+    let exported = super::export_pbix(&report, &examples(), &pbix, &Default::default()).unwrap();
+    assert!(exported.warnings.iter().any(|w| w.contains("snapshot")));
+    assert!(!exported.warnings.iter().any(|w| w.contains("relationship")));
+
+    // The model reader that decodes Desktop's own files must accept ours.
+    let model = ripbi_core::ingest::semantic_model(&pbix).unwrap().value;
+    let names: Vec<&str> = model.tables.iter().map(|t| t.name.as_str()).collect();
+    assert!(
+        names.contains(&"sales_managed") && names.contains(&"regions"),
+        "{names:?}"
+    );
+    let sales = model
+        .tables
+        .iter()
+        .find(|t| t.name == "sales_managed")
+        .unwrap();
+    let columns: Vec<&str> = sales.columns.iter().map(|c| c.name.as_str()).collect();
+    assert!(columns.contains(&"revenue") && columns.contains(&"region"));
+    assert_eq!(model.relationships.len(), 1);
+    assert_eq!(model.relationships[0].from_column, "region");
+    assert_eq!(model.relationships[0].to_table, "regions");
+
+    let imported = import(&pbix, &dir.path().join("o"), &ImportOptions::default()).unwrap();
+    imported.report.validate().unwrap();
+    assert_eq!(imported.report.datasets.len(), 2);
+    let sales = imported
+        .report
+        .datasets
+        .iter()
+        .find(|d| d.name == "sales_managed")
+        .unwrap();
+    assert_eq!(sales.joins.len(), 1);
+    assert_eq!(imported.report.visuals.len(), report.visuals.len());
+}
+
+#[test]
+fn a_multi_key_join_becomes_one_relationship_on_a_key_column() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path();
+    std::fs::write(
+        data.join("fact.csv"),
+        "n,year,region,amount\n1,2020,north,5\n2,2021,south,7\n3,2019,north,9\n",
     )
-    .unwrap_err();
-    assert!(err.to_string().contains(".pbit"));
+    .unwrap();
+    std::fs::write(
+        data.join("dim.csv"),
+        "year,region,label\n2020,north,A\n2021,south,B\n",
+    )
+    .unwrap();
+    let report: Report = serde_json::from_value(serde_json::json!({
+        "version": 1, "name": "multi",
+        "sources": [
+            {"name": "fact_csv", "type": "file", "path": "fact.csv", "format": "csv"},
+            {"name": "dim_csv", "type": "file", "path": "dim.csv", "format": "csv"}
+        ],
+        "datasets": [{"name": "fact", "source": "fact_csv", "joins": [{
+            "with": "dim_csv", "kind": "left",
+            "on": [{"left": "year", "right": "year"}, {"left": "region", "right": "region"}]}]}],
+        "visuals": [], "parameters": [], "dashboards": []
+    }))
+    .unwrap();
+
+    let pbix = data.join("m.pbix");
+    let exported = super::export_pbix(&report, data, &pbix, &Default::default()).unwrap();
+    assert!(
+        !exported.warnings.iter().any(|w| w.contains("keys")),
+        "{:?}",
+        exported.warnings
+    );
+    let model = ripbi_core::ingest::semantic_model(&pbix).unwrap().value;
+    assert_eq!(model.relationships.len(), 1);
+    let rel = &model.relationships[0];
+    assert!(rel.from_column.starts_with("key "), "{}", rel.from_column);
+    assert!(rel.to_column.starts_with("key "), "{}", rel.to_column);
 }
 
 #[test]
@@ -225,6 +287,7 @@ fn tmdl_tables_parse_back() {
         ],
         measures: vec![("Total".into(), "SUM('Sales Data'[revenue])".into())],
         csv_path: None,
+        key_columns: Vec::new(),
     };
     let query = vec![
         "let".to_string(),
@@ -241,4 +304,94 @@ fn tmdl_tables_parse_back() {
     );
     assert_eq!(parsed.measures[0].0, "Total");
     assert_eq!(parsed.csv_path.as_deref(), Some("C:/d/x.csv"));
+}
+
+/// Builds a `.pbix` from the joined example by dropping its readable model.
+fn joined_pbix(dir: &Path) -> PathBuf {
+    let report = load("sample_joined.dvz");
+    let pbit = dir.join("a.pbit");
+    export(&report, &examples(), Format::Pbit, &pbit).unwrap();
+    let pbix = dir.join("a.pbix");
+    let mut src = zip::ZipArchive::new(std::fs::File::open(&pbit).unwrap()).unwrap();
+    let mut out = zip::ZipWriter::new(std::fs::File::create(&pbix).unwrap());
+    let options = zip::write::SimpleFileOptions::default();
+    for i in 0..src.len() {
+        let mut entry = src.by_index(i).unwrap();
+        let name = entry
+            .enclosed_name()
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        if name != "DataModelSchema" {
+            out.start_file(name, options).unwrap();
+            std::io::copy(&mut entry, &mut out).unwrap();
+        }
+    }
+    out.start_file("DataModel", options).unwrap();
+    out.write_all(&[0, 1, 2, 3]).unwrap();
+    out.finish().unwrap();
+    pbix
+}
+
+#[test]
+fn a_pbix_visual_is_built_on_the_table_holding_its_measures() {
+    let dir = tempfile::tempdir().unwrap();
+    let pbix = joined_pbix(dir.path());
+    let imported = import(&pbix, &dir.path().join("o"), &ImportOptions::default()).unwrap();
+    // The measure comes from sales_managed and the dimension from regions.
+    assert_eq!(imported.report.visuals[0].dataset, "sales_managed");
+    assert!(
+        imported
+            .warnings
+            .iter()
+            .any(|w| w.contains("built on 'sales_managed'"))
+    );
+}
+
+#[test]
+fn a_pbix_joins_tables_whose_csv_files_share_a_column() {
+    let dir = tempfile::tempdir().unwrap();
+    let pbix = joined_pbix(dir.path());
+    std::fs::write(dir.path().join("regions.csv"), "region,manager\nEast,Ann\n").unwrap();
+    std::fs::write(
+        dir.path().join("sales_managed.csv"),
+        "region,revenue\nEast,10\n",
+    )
+    .unwrap();
+    let imported = import(&pbix, &dir.path().join("o"), &ImportOptions::default()).unwrap();
+    let dataset = imported
+        .report
+        .datasets
+        .iter()
+        .find(|d| d.name == "sales_managed")
+        .unwrap();
+    assert_eq!(dataset.joins.len(), 1);
+    assert_eq!(dataset.joins[0].on[0].left, "region");
+    assert!(!imported.warnings.iter().any(|w| w.contains("not related")));
+    assert!(!imported.warnings.iter().any(|w| w.contains("not found")));
+    imported.report.validate().unwrap();
+}
+
+/// `examples/sample_joined.pbix` was saved by Power BI Desktop, so its model is
+/// the real compressed `DataModel`.
+#[test]
+fn a_real_pbix_model_is_read_without_placeholders() {
+    let dir = tempfile::tempdir().unwrap();
+    let imported = import(
+        &examples().join("sample_joined.pbix"),
+        dir.path(),
+        &ImportOptions::default(),
+    )
+    .unwrap();
+    assert!(imported.warnings.is_empty(), "{:?}", imported.warnings);
+    let sales = imported
+        .report
+        .datasets
+        .iter()
+        .find(|d| d.name == "sales_managed")
+        .unwrap();
+    assert_eq!(sales.joins.len(), 1);
+    assert_eq!(sales.joins[0].on[0].left, "region");
+    assert_eq!(imported.report.visuals[0].dataset, "sales_managed");
+    imported.report.validate().unwrap();
 }

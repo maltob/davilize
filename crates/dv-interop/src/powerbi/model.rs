@@ -8,7 +8,7 @@ use super::{Model, ModelColumn, ModelRelationship, ModelTable, guid};
 
 // ------------------------------------------------------------ CSV schema
 
-fn split_csv_line(line: &str) -> Vec<String> {
+pub(super) fn split_csv_line(line: &str) -> Vec<String> {
     let mut fields = Vec::new();
     let mut current = String::new();
     let mut quoted = false;

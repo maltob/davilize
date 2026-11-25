@@ -77,9 +77,9 @@ enum Command {
     /// Export a .dvz report as a Tableau workbook or a Power BI template or project.
     ///
     /// Only CSV sources are exported. Things the target cannot express (parameters,
-    /// row limits, some filters) are listed as warnings on stderr. Power BI Desktop
-    /// files (.pbix) cannot be written directly: export a .pbit or a project, open it
-    /// in Power BI Desktop and save as .pbix.
+    /// row limits, some filters) are listed as warnings on stderr. A .pbix
+    /// holds a snapshot of the CSV data (refresh it in Power BI Desktop to update it);
+    /// a .pbit or a project folder loads the data when opened instead.
     Export {
         /// The .dvz report to export.
         report: PathBuf,

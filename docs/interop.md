@@ -28,14 +28,60 @@ with the CLI.
 | Tableau `.twbx` | yes (CSV files inside are unpacked to `<name>_data/`) | yes (CSV files packed under `Data/`) |
 | Power BI `.pbit` template | yes | yes |
 | Power BI Project folder (TMDL + PBIR, `.pbip`) | yes | yes |
-| Power BI `.pbix` | pages only, see below | no |
+| Power BI `.pbix` | yes, model and pages, see below | yes: tables, data snapshot, relationships and calculated columns, see below |
 
 ## `.pbix`
 
-A `.pbix` keeps its data model in a compressed binary that cannot be read. Importing
-one reads the report pages only; each table the visuals use becomes a placeholder CSV
-source (`<table>.csv`) that you must point at your data. To produce a `.pbix`, export a
-`.pbit` or a project folder, open it in Power BI Desktop and save as `.pbix`.
+A `.pbix` keeps its data model in `DataModel`, an XPress9-compressed Analysis Services
+backup. Import decodes it (with the `ripbi-core` crate, which bundles Microsoft's MIT
+licensed XPress9 code) and reads the model metadata: tables, calculated columns, DAX
+measures, active relationships and the CSV file each table loads. Only the metadata is
+read, never the data. Tables loaded from anything other than a CSV file, and DAX
+calculated tables, are reported as warnings. If the model cannot be decoded, only the
+report pages are imported, with placeholder `<table>.csv` sources and relationships
+guessed from CSV files that sit next to the `.pbix`.
+
+### Writing a `.pbix`
+
+`davilize export report.dvz --format pbix --out report.pbix` writes the report's tables
+with a **snapshot of their CSV data**, plus the pages and visuals. Power BI Desktop opens
+the file, and its own engine returns the same results the CSV files give; refresh it in
+Desktop to pick up later changes to the files.
+
+What it stores:
+
+- one table per dataset, with its columns, DAX measures and the Power Query that loads
+  the CSV (so Refresh works);
+- the data, encoded the way the engine stores it: strings in first-appearance
+  dictionaries, whole numbers, decimals and dates in sorted dictionaries, booleans as
+  0/1 (single segment, so up to 8,388,608 rows per table);
+- relationships, with the hidden index table the engine builds for each, so Power BI
+  uses them without any setup. A join on several keys gets a calculated key column on
+  both tables (the keys joined with `|`) and one relationship on those columns;
+- calculated columns: the DAX expression and its computed values. A `.pbix` holds the
+  values, so the exporter needs an engine to evaluate them. The CLI and the app provide
+  one; the library function `export` does not, and `export_with` takes an
+  `ExportOptions::column_values` callback instead. A report with calculated columns
+  exported without one stops with an error.
+
+Limits:
+
+- **Blank cells.** A blank text cell is stored as empty text (Power BI shows it as
+  "(Blank)"). A blank number, date or boolean stops the export and names the column and
+  row: the engine rejects the segment statistics of a column that uses its reserved null
+  id however the counts are recorded, and a NaN entry in the dictionary turns sums and
+  maximums into NaN.
+- Sources that are not CSV files are skipped with a warning, as for the other formats.
+- Whole numbers and decimals go through a dictionary rather than the engine's value
+  encoding, because the value encoding needs a hidden attribute hierarchy to answer
+  `MIN` and `MAX` correctly. The result is the same; the file is somewhat larger.
+
+How it was checked: a throwaway analysis engine (`msmdsrv.exe` from the Desktop install,
+sent an `ImageLoad` for the `.pbix` and its `/DataModel` part, as Desktop does) loads the
+file and answers DAX queries; the answers were compared with values computed from the CSV
+files for every column type, and Desktop itself opened the files and returned the same.
+The column file formats are byte-identical to the files Desktop wrote for the same sample
+data.
 
 ## What converts
 

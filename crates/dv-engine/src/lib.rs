@@ -507,6 +507,29 @@ impl Engine {
         self.query(&format!("SUMMARIZE {}", sql::quote_ident(relation)))
     }
 
+    /// Every value of `column` in `relation` as text, in row order; NULL is empty.
+    pub fn column_text(&self, relation: &str, column: &str) -> Result<Vec<String>, EngineError> {
+        let sql = format!(
+            "SELECT CAST({} AS VARCHAR) FROM {}",
+            sql::quote_ident(column),
+            sql::quote_ident(relation)
+        );
+        let mut out = Vec::new();
+        for batch in self.query(&sql)? {
+            let values = batch.column(0);
+            for row in 0..batch.num_rows() {
+                out.push(if values.is_null(row) {
+                    String::new()
+                } else {
+                    array_value_to_string(values, row).map_err(|e| {
+                        EngineError::Unsupported(format!("cannot read {relation}.{column}: {e}"))
+                    })?
+                });
+            }
+        }
+        Ok(out)
+    }
+
     /// Runs a SQL query and collects the results as Arrow record batches.
     pub fn query(&self, sql: &str) -> Result<Vec<RecordBatch>, EngineError> {
         let mut stmt = self.conn.prepare(sql)?;

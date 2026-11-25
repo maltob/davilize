@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use clap::ValueEnum;
 use dv_core::Report;
 use dv_engine::Engine;
-use dv_interop::{Format, ImportOptions, InteropError};
+use dv_interop::{ExportOptions, Format, ImportOptions, InteropError};
 use serde_json::json;
 
 use crate::{CliError, CliResult, EXIT_INPUT, EXIT_OUTPUT, Log};
@@ -20,6 +20,8 @@ pub enum InteropFormat {
     Pbit,
     /// Power BI Project folder (TMDL model + PBIR report).
     Pbip,
+    /// Power BI Desktop file: the tables with a snapshot of their CSV data, and their relationships.
+    Pbix,
 }
 
 impl InteropFormat {
@@ -29,6 +31,7 @@ impl InteropFormat {
             InteropFormat::Twbx => Format::Twbx,
             InteropFormat::Pbit => Format::Pbit,
             InteropFormat::Pbip => Format::Pbip,
+            InteropFormat::Pbix => Format::Pbix,
         }
     }
 }
@@ -92,8 +95,23 @@ pub fn export_file(input: &Path, format: InteropFormat, out: &Path, log: &Log) -
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-    let exported = dv_interop::export(&report, &report_dir, format.format(), out)
-        .map_err(|e| interop_error(e, EXIT_OUTPUT))?;
+    let exported = if matches!(format, InteropFormat::Pbix) {
+        // A .pbix stores calculated columns with their data: the engine computes it.
+        let engine = Engine::new()?;
+        engine.register_report(&report, &report_dir)?;
+        let compute = |dataset: &str, column: &str| {
+            engine
+                .column_text(dataset, column)
+                .map_err(|e| e.to_string())
+        };
+        let options = ExportOptions {
+            column_values: Some(&compute),
+        };
+        dv_interop::export_with(&report, &report_dir, format.format(), out, &options)
+    } else {
+        dv_interop::export(&report, &report_dir, format.format(), out)
+    }
+    .map_err(|e| interop_error(e, EXIT_OUTPUT))?;
     for warning in &exported.warnings {
         log.warn(warning, json!({}));
     }

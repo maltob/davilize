@@ -132,6 +132,18 @@ pub fn import(
     Ok(imported)
 }
 
+/// Computes the values of a calculated column: `(dataset, column)` to one text cell per
+/// row, or why it cannot. A `.pbix` stores calculated columns with their data, so the
+/// exporter needs an engine to evaluate them; without one such a report cannot be
+/// exported to `.pbix`.
+pub type ColumnValues<'a> = &'a dyn Fn(&str, &str) -> Result<Vec<String>, String>;
+
+/// Options for [`export_with`].
+#[derive(Default)]
+pub struct ExportOptions<'a> {
+    pub column_values: Option<ColumnValues<'a>>,
+}
+
 /// Exports a report. `report_dir` is the folder the report was loaded from (its
 /// relative data paths are resolved against it). For Power BI Project output `out`
 /// is a folder; otherwise it is the file to write.
@@ -141,6 +153,17 @@ pub fn export(
     format: Format,
     out: &Path,
 ) -> Result<Exported, InteropError> {
+    export_with(report, report_dir, format, out, &ExportOptions::default())
+}
+
+/// [`export`] with options.
+pub fn export_with(
+    report: &Report,
+    report_dir: &Path,
+    format: Format,
+    out: &Path,
+    options: &ExportOptions<'_>,
+) -> Result<Exported, InteropError> {
     report
         .validate()
         .map_err(|e| InteropError::Invalid(e.to_string()))?;
@@ -149,8 +172,6 @@ pub fn export(
         Format::Twbx => tableau::export(report, report_dir, true, out),
         Format::Pbit => powerbi::export_pbit(report, report_dir, out),
         Format::Pbip => powerbi::export_pbip(report, report_dir, out),
-        Format::Pbix => Err(InteropError::Unsupported(
-            "Power BI Desktop cannot be written directly: export a .pbit template or a project folder, open it in Power BI Desktop and save as .pbix".into(),
-        )),
+        Format::Pbix => powerbi::export_pbix(report, report_dir, out, options),
     }
 }

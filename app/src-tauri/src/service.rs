@@ -100,6 +100,8 @@ pub enum ExportFormat {
     Pbit,
     /// Power BI Project folder.
     Pbip,
+    /// Power BI Desktop file.
+    Pbix,
 }
 
 impl ExportFormat {
@@ -110,6 +112,7 @@ impl ExportFormat {
             ExportFormat::Twbx => Some(dv_interop::Format::Twbx),
             ExportFormat::Pbit => Some(dv_interop::Format::Pbit),
             ExportFormat::Pbip => Some(dv_interop::Format::Pbip),
+            ExportFormat::Pbix => Some(dv_interop::Format::Pbix),
             _ => None,
         }
     }
@@ -120,6 +123,7 @@ impl ExportFormat {
             "twbx" => Ok(ExportFormat::Twbx),
             "pbit" => Ok(ExportFormat::Pbit),
             "pbip" => Ok(ExportFormat::Pbip),
+            "pbix" => Ok(ExportFormat::Pbix),
             "html" => Ok(ExportFormat::Html),
             "png" => Ok(ExportFormat::Png),
             "pdf" => Ok(ExportFormat::Pdf),
@@ -677,7 +681,11 @@ pub fn export_report(
     let warnings = Vec::new();
 
     match format {
-        ExportFormat::Twb | ExportFormat::Twbx | ExportFormat::Pbit | ExportFormat::Pbip => {
+        ExportFormat::Twb
+        | ExportFormat::Twbx
+        | ExportFormat::Pbit
+        | ExportFormat::Pbip
+        | ExportFormat::Pbix => {
             unreachable!("handled above")
         }
         ExportFormat::Csv => {
@@ -760,10 +768,26 @@ fn export_interop(
         Format::Twb => dir.join(format!("{stem}.twb")),
         Format::Twbx => dir.join(format!("{stem}.twbx")),
         Format::Pbit => dir.join(format!("{stem}.pbit")),
+        Format::Pbix => dir.join(format!("{stem}.pbix")),
         _ => dir.join(format!("{stem}_pbip")),
     };
-    let exported =
-        dv_interop::export(report, Path::new(""), format, &out).map_err(interop_error)?;
+    let exported = if format == Format::Pbix {
+        // A .pbix stores calculated columns with their data: the engine computes it.
+        let engine = Engine::new()?;
+        engine.register_report(report, Path::new(""))?;
+        let compute = |dataset: &str, column: &str| {
+            engine
+                .column_text(dataset, column)
+                .map_err(|e| e.to_string())
+        };
+        let options = dv_interop::ExportOptions {
+            column_values: Some(&compute),
+        };
+        dv_interop::export_with(report, Path::new(""), format, &out, &options)
+    } else {
+        dv_interop::export(report, Path::new(""), format, &out)
+    }
+    .map_err(interop_error)?;
     Ok(ExportSummary {
         files: exported
             .files

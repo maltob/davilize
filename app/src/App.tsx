@@ -60,6 +60,7 @@ const EXPORT_FORMATS = [
   { value: "twbx", label: "Tableau packaged (.twbx)" },
   { value: "pbit", label: "Power BI template (.pbit)" },
   { value: "pbip", label: "Power BI project folder" },
+  { value: "pbix", label: "Power BI file (.pbix, data snapshot)" },
 ];
 
 type ToastTone = "info" | "success" | "error";

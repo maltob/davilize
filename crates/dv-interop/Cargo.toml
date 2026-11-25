@@ -10,7 +10,9 @@ dv-core = { path = "../dv-core" }
 serde_json.workspace = true
 thiserror.workspace = true
 roxmltree = "0.20"
+ripbi-core = "0.13"
+ripbi-xpress9 = { version = "0.13", features = ["encoder"] }
+rusqlite = { version = "0.41", default-features = false, features = ["bundled"] }
+tempfile.workspace = true
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
-[dev-dependencies]
-tempfile.workspace = true

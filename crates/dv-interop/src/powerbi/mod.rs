@@ -5,15 +5,18 @@
 //! semantic model (`Model`) and of the report pages (`PageSpec`), so the
 //! parsers and writers for the different file layouts stay independent.
 
+mod catalog;
+mod datamodel;
 mod export;
 mod import;
 mod layout;
 mod model;
+mod vertipaq;
 
 use dv_core::{Aggregate, FilterOp};
 use serde_json::Value;
 
-pub(crate) use export::{export_pbip, export_pbit};
+pub(crate) use export::{export_pbip, export_pbit, export_pbix};
 pub(crate) use import::import;
 
 #[derive(Debug, Clone, Default)]
@@ -30,6 +33,9 @@ pub(crate) struct ModelTable {
     pub measures: Vec<(String, String)>,
     /// The CSV file the table loads, when its query is a plain CSV import.
     pub csv_path: Option<String>,
+    /// Calculated columns that join the values of other columns into one text key,
+    /// for relationships on several columns: (column name, source columns).
+    pub key_columns: Vec<(String, Vec<String>)>,
 }
 
 #[derive(Debug, Clone)]
