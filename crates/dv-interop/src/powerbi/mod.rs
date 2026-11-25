@@ -5,12 +5,15 @@
 //! semantic model (`Model`) and of the report pages (`PageSpec`), so the
 //! parsers and writers for the different file layouts stay independent.
 
+#[cfg(feature = "pbix")]
 mod catalog;
+#[cfg(feature = "pbix")]
 mod datamodel;
 mod export;
 mod import;
 mod layout;
 mod model;
+#[cfg(feature = "pbix")]
 mod vertipaq;
 
 use dv_core::{Aggregate, FilterOp};

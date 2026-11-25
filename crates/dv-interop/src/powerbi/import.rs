@@ -56,19 +56,19 @@ pub(crate) fn import(
 // -------------------------------------------------------------- reading
 
 fn read_json(path: &Path) -> Result<Value, InteropError> {
-    let bytes = std::fs::read(path).map_err(io_err(path))?;
+    let bytes = crate::fsx::read(path).map_err(io_err(path))?;
     serde_json::from_str(&decode_text(&bytes))
         .map_err(|e| InteropError::Format(format!("{}: {e}", path.display())))
 }
 
 fn subdirs_ending(dir: &Path, suffix: &str) -> Vec<PathBuf> {
-    let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+    let mut found: Vec<PathBuf> = crate::fsx::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
         .map(|e| e.path())
         .filter(|p| {
-            p.is_dir()
+            crate::fsx::is_dir(p)
                 && p.file_name()
                     .is_some_and(|n| n.to_string_lossy().ends_with(suffix))
         })
@@ -78,7 +78,7 @@ fn subdirs_ending(dir: &Path, suffix: &str) -> Vec<PathBuf> {
 }
 
 fn read_project(path: &Path, warnings: &mut Vec<String>) -> Result<Loaded, InteropError> {
-    let mut root = if path.is_dir() {
+    let mut root = if crate::fsx::is_dir(path) {
         path.to_path_buf()
     } else {
         path.parent().map(Path::to_path_buf).unwrap_or_default()
@@ -117,10 +117,10 @@ fn read_semantic_model(
     warnings: &mut Vec<String>,
 ) -> Result<Option<Model>, InteropError> {
     let definition = dir.join("definition");
-    if definition.is_dir() {
+    if crate::fsx::is_dir(&definition) {
         let mut model = Model::default();
         let tables_dir = definition.join("tables");
-        let mut files: Vec<PathBuf> = std::fs::read_dir(&tables_dir)
+        let mut files: Vec<PathBuf> = crate::fsx::read_dir(&tables_dir)
             .into_iter()
             .flatten()
             .flatten()
@@ -129,20 +129,20 @@ fn read_semantic_model(
             .collect();
         files.sort();
         for file in files {
-            let text = std::fs::read_to_string(&file).map_err(io_err(&file))?;
+            let text = crate::fsx::read_to_string(&file).map_err(io_err(&file))?;
             match parse_tmdl_table(&text) {
                 Some(t) => model.tables.push(t),
                 None => warnings.push(format!("{} is not a table definition", file.display())),
             }
         }
         let rel = definition.join("relationships.tmdl");
-        if let Ok(text) = std::fs::read_to_string(&rel) {
+        if let Ok(text) = crate::fsx::read_to_string(&rel) {
             model.relationships = parse_tmdl_relationships(&text);
         }
         return Ok(Some(model));
     }
     let bim = dir.join("model.bim");
-    if bim.is_file() {
+    if crate::fsx::is_file(&bim) {
         return Ok(parse_schema_json(&read_json(&bim)?));
     }
     warnings.push(format!(
@@ -157,7 +157,7 @@ fn read_report_folder(
     warnings: &mut Vec<String>,
 ) -> Result<Vec<PageSpec>, InteropError> {
     let pages_dir = dir.join("definition").join("pages");
-    if pages_dir.is_dir() {
+    if crate::fsx::is_dir(&pages_dir) {
         let order: Vec<String> = read_json(&pages_dir.join("pages.json"))
             .ok()
             .and_then(|v| {
@@ -168,11 +168,11 @@ fn read_report_folder(
                 })
             })
             .unwrap_or_default();
-        let mut names: Vec<String> = std::fs::read_dir(&pages_dir)
+        let mut names: Vec<String> = crate::fsx::read_dir(&pages_dir)
             .into_iter()
             .flatten()
             .flatten()
-            .filter(|e| e.path().is_dir())
+            .filter(|e| crate::fsx::is_dir(&e.path()))
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
         names.sort_by_key(|n| order.iter().position(|o| o == n).unwrap_or(usize::MAX));
@@ -182,17 +182,17 @@ fn read_report_folder(
             let page_json = read_json(&page_dir.join("page.json")).unwrap_or(Value::Null);
             let mut visuals = Vec::new();
             let visuals_dir = page_dir.join("visuals");
-            let mut vdirs: Vec<PathBuf> = std::fs::read_dir(&visuals_dir)
+            let mut vdirs: Vec<PathBuf> = crate::fsx::read_dir(&visuals_dir)
                 .into_iter()
                 .flatten()
                 .flatten()
                 .map(|e| e.path())
-                .filter(|p| p.is_dir())
+                .filter(|p| crate::fsx::is_dir(p))
                 .collect();
             vdirs.sort();
             for vdir in vdirs {
                 let file = vdir.join("visual.json");
-                if !file.is_file() {
+                if !crate::fsx::is_file(&file) {
                     continue;
                 }
                 let json = read_json(&file)?;
@@ -225,7 +225,7 @@ fn read_report_folder(
         return Ok(pages);
     }
     let legacy = dir.join("report.json");
-    if legacy.is_file() {
+    if crate::fsx::is_file(&legacy) {
         return Ok(pages_from_legacy(&read_json(&legacy)?, warnings));
     }
     warnings.push(format!("{} has no report definition", dir.display()));
@@ -237,7 +237,7 @@ fn read_archive(
     has_model: bool,
     warnings: &mut Vec<String>,
 ) -> Result<Loaded, InteropError> {
-    let file = std::fs::File::open(path).map_err(io_err(path))?;
+    let file = crate::fsx::open(path).map_err(io_err(path))?;
     let mut archive = zip::ZipArchive::new(file)
         .map_err(|e| InteropError::Archive(format!("{}: {e}", path.display())))?;
     let mut part = |name: &str| -> Option<String> {
@@ -286,6 +286,7 @@ fn read_archive(
 }
 
 /// Reads the compressed `DataModel` of a `.pbix` (an XPress9 ABF backup).
+#[cfg(feature = "pbix")]
 fn read_datamodel(path: &Path, warnings: &mut Vec<String>) -> Option<Model> {
     use ripbi_core::{ColumnKind, PartitionSource};
     let ingested = ripbi_core::ingest::semantic_model(path)
@@ -347,12 +348,21 @@ fn read_datamodel(path: &Path, warnings: &mut Vec<String>) -> Option<Model> {
     Some(model)
 }
 
+/// Without the `pbix` feature the compressed model cannot be decoded.
+#[cfg(not(feature = "pbix"))]
+fn read_datamodel(_path: &Path, warnings: &mut Vec<String>) -> Option<Model> {
+    warnings.push(
+        "the .pbix data model is compressed; reading it needs the desktop app or the CLI".into(),
+    );
+    None
+}
+
 // ------------------------------------------------------------- building
 
 /// The column names in the first line of a CSV file, when it can be read.
 fn csv_header(path: &Path) -> Vec<String> {
     use std::io::{BufRead, BufReader};
-    let Ok(file) = std::fs::File::open(path) else {
+    let Ok(file) = crate::fsx::open(path) else {
         return Vec::new();
     };
     let mut line = String::new();
@@ -412,7 +422,7 @@ fn model_from_pages(pages: &[PageSpec], base: &Path) -> Model {
 
     for table in &mut model.tables {
         let file = base.join(format!("{}.csv", table.name));
-        if file.is_file() {
+        if crate::fsx::is_file(&file) {
             for name in csv_header(&file) {
                 if !table.columns.iter().any(|c| c.name == name) {
                     table.columns.push(ModelColumn {
@@ -481,7 +491,7 @@ fn data_path(raw: &str, base: &Path, out_dir: &Path) -> (String, bool) {
     let normalised = raw.replace('\\', "/");
     let p = PathBuf::from(&normalised);
     let absolute = if p.is_absolute() { p } else { base.join(p) };
-    let exists = absolute.exists();
+    let exists = crate::fsx::exists(&absolute);
     let shown = match absolute.strip_prefix(out_dir) {
         Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
         Err(_) => absolute.to_string_lossy().replace('\\', "/"),

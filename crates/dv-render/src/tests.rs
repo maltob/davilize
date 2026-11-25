@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use duckdb::arrow::array::{ArrayRef, Date32Array, Float64Array, Int64Array, StringArray};
-use duckdb::arrow::record_batch::RecordBatch;
+use arrow::array::{ArrayRef, Date32Array, Float64Array, Int64Array, StringArray};
+use arrow::record_batch::RecordBatch;
 use dv_core::{Aggregate, ChartType, Encodings, Measure, Visual};
 use serde_json::{Value, json};
 
@@ -220,7 +220,7 @@ fn temporal_columns_get_excel_serials() {
         other => panic!("expected a time cell, got {other:?}"),
     }
     assert_eq!(
-        excel_serial(&duckdb::arrow::datatypes::DataType::Date32, 1),
+        excel_serial(&arrow::datatypes::DataType::Date32, 1),
         25570.0
     );
 }

@@ -101,7 +101,7 @@ impl Exporter<'_> {
             }
             dir
         } else {
-            let abs = std::fs::canonicalize(&absolute).unwrap_or(absolute);
+            let abs = crate::fsx::canonicalize(&absolute).unwrap_or(absolute);
             strip_verbatim(abs.parent().unwrap_or(Path::new("")))
         };
         Some(TableSpec {
@@ -720,10 +720,10 @@ pub(crate) fn export(
     );
 
     if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent).map_err(io_err(parent))?;
+        crate::fsx::create_dir_all(parent).map_err(io_err(parent))?;
     }
     if packaged {
-        let file = std::fs::File::create(out).map_err(io_err(out))?;
+        let file = crate::fsx::create(out).map_err(io_err(out))?;
         let mut zip = zip::ZipWriter::new(file);
         let options = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated);
@@ -736,14 +736,14 @@ pub(crate) fn export(
             .map_err(archive_err)?;
         zip.write_all(xml.as_bytes()).map_err(io_err(out))?;
         for (source, entry) in &exporter.data_files {
-            let bytes = std::fs::read(source).map_err(io_err(source))?;
+            let bytes = crate::fsx::read(source).map_err(io_err(source))?;
             zip.start_file(entry.as_str(), options)
                 .map_err(archive_err)?;
             zip.write_all(&bytes).map_err(io_err(out))?;
         }
         zip.finish().map_err(archive_err)?;
     } else {
-        std::fs::write(out, xml).map_err(io_err(out))?;
+        crate::fsx::write(out, xml).map_err(io_err(out))?;
     }
     Ok(Exported {
         files: vec![out.to_path_buf()],

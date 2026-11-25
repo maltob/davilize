@@ -23,8 +23,8 @@ use duckdb::arrow::record_batch::RecordBatch;
 use duckdb::arrow::util::display::array_value_to_string;
 use duckdb::vtab::arrow::ArrowVTab;
 use dv_core::{
-    Dataset, DbKind, FileFormat, JoinKind, ParamType, ParamValues, Parameter, Report, Source,
-    SourceKind, Visual,
+    Dataset, DbKind, FileFormat, ParamType, ParamValues, Parameter, Report, Source, SourceKind,
+    Visual,
 };
 
 pub use database::{connection_env_var, resolve_connection};
@@ -280,89 +280,17 @@ impl Engine {
     /// `<with>_<column>_2`, `_3`, and so on. Join keys are matched to real columns
     /// case-insensitively before any SQL is built.
     fn join_base(&self, dataset: &Dataset) -> Result<String, EngineError> {
-        self.reject_database_relation(dataset, &dataset.source)?;
-        let source_relation = format!("SELECT * FROM {}", sql::quote_ident(&dataset.source));
-        let mut left_columns = self.column_names(&source_relation).map_err(|_| {
-            EngineError::InvalidSpec(format!(
-                "dataset '{}' references unknown source '{}'",
-                dataset.name, dataset.source
-            ))
-        })?;
-        let mut body = source_relation;
-
-        for join in &dataset.joins {
-            self.reject_database_relation(dataset, &join.with)?;
-            let right_columns = self
-                .column_names(&format!("SELECT * FROM {}", sql::quote_ident(&join.with)))
-                .map_err(|_| {
-                    EngineError::InvalidSpec(format!(
-                        "dataset '{}' joins unknown source '{}'",
-                        dataset.name, join.with
-                    ))
+        let columns_of = |relation: &str| {
+            self.reject_database_relation(dataset, relation)
+                .map_err(|e| match e {
+                    EngineError::InvalidSpec(message) => dv_sql::SqlError::InvalidSpec(message),
+                    other => dv_sql::SqlError::InvalidSpec(other.to_string()),
                 })?;
-
-            // Resolve every key to the actual spelling of its columns before building SQL.
-            let mut conditions = Vec::with_capacity(join.on.len());
-            for key in &join.on {
-                let left = find_column(&left_columns, &key.left).ok_or_else(|| {
-                    EngineError::InvalidSpec(format!(
-                        "join on dataset '{}': column '{}' not found in '{}'",
-                        dataset.name, key.left, dataset.source
-                    ))
-                })?;
-                let right = find_column(&right_columns, &key.right).ok_or_else(|| {
-                    EngineError::InvalidSpec(format!(
-                        "join on dataset '{}': column '{}' not found in '{}'",
-                        dataset.name, key.right, join.with
-                    ))
-                })?;
-                conditions.push(format!(
-                    "{}.{} = {}.{}",
-                    sql::quote_ident("l"),
-                    sql::quote_ident(left),
-                    sql::quote_ident("r"),
-                    sql::quote_ident(right)
-                ));
-            }
-
-            let mut taken: HashSet<String> = left_columns
-                .iter()
-                .map(|c| c.to_ascii_lowercase())
-                .collect();
-            let mut select = Vec::new();
-            let mut outputs = Vec::new();
-            for column in &left_columns {
-                select.push(format!(
-                    "{}.{} AS {}",
-                    sql::quote_ident("l"),
-                    sql::quote_ident(column),
-                    sql::quote_ident(column)
-                ));
-                outputs.push(column.clone());
-            }
-            for column in &right_columns {
-                let output = unique_output_name(column, &join.with, &mut taken);
-                select.push(format!(
-                    "{}.{} AS {}",
-                    sql::quote_ident("r"),
-                    sql::quote_ident(column),
-                    sql::quote_ident(&output)
-                ));
-                outputs.push(output);
-            }
-
-            body = format!(
-                "SELECT {} FROM ({body}) AS {} {} JOIN {} AS {} ON {}",
-                select.join(", "),
-                sql::quote_ident("l"),
-                join_keyword(join.kind),
-                sql::quote_ident(&join.with),
-                sql::quote_ident("r"),
-                conditions.join(" AND ")
-            );
-            left_columns = outputs;
-        }
-        Ok(body)
+            Ok(self
+                .column_names(&format!("SELECT * FROM {}", sql::quote_ident(relation)))
+                .ok())
+        };
+        Ok(dv_sql::join_select(dataset, &columns_of)?)
     }
 
     /// Database sources expose several tables under a schema, so they are not one
@@ -611,42 +539,6 @@ pub fn infer_format(path: &Path) -> Result<FileFormat, EngineError> {
             path.display()
         ))),
     }
-}
-
-/// The SQL keyword for a join kind.
-fn join_keyword(kind: JoinKind) -> &'static str {
-    match kind {
-        JoinKind::Inner => "INNER",
-        JoinKind::Left => "LEFT",
-        JoinKind::Right => "RIGHT",
-        JoinKind::Full => "FULL OUTER",
-    }
-}
-
-/// The column in `columns` whose name matches `name` ignoring ASCII case.
-fn find_column<'a>(columns: &'a [String], name: &str) -> Option<&'a str> {
-    columns
-        .iter()
-        .find(|c| c.eq_ignore_ascii_case(name))
-        .map(String::as_str)
-}
-
-/// Picks the output name for a right-side column: its own name when free, otherwise
-/// `<with>_<column>`, with `_2`, `_3`, ... appended while that is taken too. Records the
-/// chosen name in `taken` (lowercase).
-fn unique_output_name(column: &str, with: &str, taken: &mut HashSet<String>) -> String {
-    let mut name = column.to_string();
-    if taken.contains(&name.to_ascii_lowercase()) {
-        let base = format!("{with}_{column}");
-        name = base.clone();
-        let mut suffix = 2;
-        while taken.contains(&name.to_ascii_lowercase()) {
-            name = format!("{base}_{suffix}");
-            suffix += 1;
-        }
-    }
-    taken.insert(name.to_ascii_lowercase());
-    name
 }
 
 /// Renders one cell of a batch as text, by column name.

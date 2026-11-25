@@ -4,6 +4,7 @@
 //! reported as a warning instead of failing the whole conversion.
 
 pub mod expr;
+pub mod fsx;
 mod powerbi;
 mod tableau;
 mod util;
@@ -55,7 +56,7 @@ pub enum Format {
 impl Format {
     /// Detects the format of an existing file or folder.
     pub fn detect(path: &Path) -> Option<Format> {
-        if path.is_dir() {
+        if fsx::is_dir(path) {
             return Some(Format::Pbip);
         }
         Self::from_extension(path)
@@ -118,7 +119,7 @@ pub fn import(
             path.display()
         ))
     })?;
-    std::fs::create_dir_all(out_dir).map_err(io_err(out_dir))?;
+    crate::fsx::create_dir_all(out_dir).map_err(io_err(out_dir))?;
     let imported = match format {
         Format::Twb | Format::Twbx => tableau::import(path, out_dir, options)?,
         Format::Pbix | Format::Pbit | Format::Pbip => {

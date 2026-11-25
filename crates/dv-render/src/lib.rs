@@ -21,11 +21,11 @@ pub mod table;
 pub mod vegalite;
 pub mod xlsx;
 
-use duckdb::arrow::record_batch::RecordBatch;
+use arrow::record_batch::RecordBatch;
 use dv_core::{ChartType, Encodings, Visual};
 use serde_json::Value;
 
-pub use dashboard::dashboard_views;
+pub use dashboard::{PlannedDashboard, dashboard_plan, dashboard_views};
 pub use html::{ChartPlacement, DashboardView, Scripts, html_dashboards, html_report};
 pub use summary::chart_summary;
 pub use table::{Cell, Column, Kind, Sampling, Table};

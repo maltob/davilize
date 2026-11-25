@@ -3,6 +3,7 @@ import {
   api,
   pickDataFiles,
   pickFileToImport,
+  pickProjectFolderToImport,
   pickFolder,
   pickReportToOpen,
   pickReportToSave,
@@ -48,9 +49,10 @@ import {
   type Pill,
   type Slot,
 } from "./model";
+import { isWeb, WEB_EXPORT_FORMATS } from "./web/platform";
 import type { ApiError, CalculatedField, ColumnView, Dashboard, Dataset, Parameter, Report, Visual } from "./types";
 
-const EXPORT_FORMATS = [
+const ALL_EXPORT_FORMATS = [
   { value: "html", label: "HTML page" },
   { value: "xlsx", label: "Excel workbook" },
   { value: "csv", label: "CSV per chart" },
@@ -62,6 +64,10 @@ const EXPORT_FORMATS = [
   { value: "pbip", label: "Power BI project folder" },
   { value: "pbix", label: "Power BI file (.pbix, data snapshot)" },
 ];
+
+const EXPORT_FORMATS = isWeb
+  ? ALL_EXPORT_FORMATS.filter((f) => WEB_EXPORT_FORMATS.includes(f.value))
+  : ALL_EXPORT_FORMATS;
 
 type ToastTone = "info" | "success" | "error";
 interface Toast {
@@ -537,8 +543,8 @@ export default function App() {
     }
   }
 
-  async function importReport() {
-    const path = await pickFileToImport();
+  async function importReport(project = false) {
+    const path = project ? await pickProjectFolderToImport() : await pickFileToImport();
     if (!path) return;
     await run("Importing", async () => {
       const imported = await api.importReport(path);
@@ -691,12 +697,23 @@ export default function App() {
           <button
             type="button"
             className={button}
-            onClick={importReport}
+            onClick={() => importReport()}
             disabled={busy !== null}
             title="Import a Tableau (.twb, .twbx) or Power BI (.pbit, .pbix) file"
           >
             Import...
           </button>
+          {isWeb && (
+            <button
+              type="button"
+              className={button}
+              onClick={() => importReport(true)}
+              disabled={busy !== null}
+              title="Import a Power BI Project folder"
+            >
+              Import project...
+            </button>
+          )}
           <button type="button" className={button} onClick={() => saveReport(false)} disabled={busy !== null}>
             Save
           </button>

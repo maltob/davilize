@@ -4,14 +4,23 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[features]
+# `.pbix` data models: the SQLite catalog and XPress9 compression are C code, so the browser
+# (WebAssembly) build leaves them out. Without it, `.pbix` export is refused and `.pbix`
+# import reads the report pages only.
+default = ["pbix"]
+pbix = ["dep:ripbi-core", "dep:ripbi-xpress9", "dep:rusqlite", "dep:tempfile"]
+
 [dependencies]
 dv-core = { path = "../dv-core" }
 serde_json.workspace = true
 thiserror.workspace = true
 roxmltree = "0.20"
-ripbi-core = "0.13"
-ripbi-xpress9 = { version = "0.13", features = ["encoder"] }
-rusqlite = { version = "0.41", default-features = false, features = ["bundled"] }
-tempfile.workspace = true
+ripbi-core = { version = "0.13", optional = true }
+ripbi-xpress9 = { version = "0.13", features = ["encoder"], optional = true }
+rusqlite = { version = "0.41", default-features = false, features = ["bundled"], optional = true }
+tempfile = { workspace = true, optional = true }
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
+[dev-dependencies]
+tempfile.workspace = true

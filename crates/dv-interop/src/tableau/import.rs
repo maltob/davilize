@@ -80,7 +80,7 @@ pub(crate) fn import(
     let xml = if is_packaged {
         read_twbx(path, out_dir, &stem, &mut ctx)?
     } else {
-        std::fs::read_to_string(path).map_err(io_err(path))?
+        crate::fsx::read_to_string(path).map_err(io_err(path))?
     };
 
     let doc = Document::parse(&xml)
@@ -148,7 +148,7 @@ fn read_twbx(
     stem: &str,
     ctx: &mut Ctx<'_>,
 ) -> Result<String, InteropError> {
-    let file = std::fs::File::open(path).map_err(io_err(path))?;
+    let file = crate::fsx::open(path).map_err(io_err(path))?;
     let mut archive = zip::ZipArchive::new(file)
         .map_err(|e| InteropError::Archive(format!("{}: {e}", path.display())))?;
     let mut workbook: Option<String> = None;
@@ -179,9 +179,9 @@ fn read_twbx(
             }
             let target = out_dir.join(&data_dir_name).join(rest);
             if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent).map_err(io_err(parent))?;
+                crate::fsx::create_dir_all(parent).map_err(io_err(parent))?;
             }
-            let mut out = std::fs::File::create(&target).map_err(io_err(&target))?;
+            let mut out = crate::fsx::create(&target).map_err(io_err(&target))?;
             std::io::copy(&mut entry.by_ref().take(MAX_UNPACKED_BYTES), &mut out)
                 .map_err(io_err(&target))?;
             ctx.files.push(target);
@@ -396,7 +396,7 @@ fn locate_file(ctx: &mut Ctx<'_>, directory: &str, filename: &str) -> String {
             ctx.twb_dir.join(p)
         }
     };
-    if !candidate.exists() {
+    if !crate::fsx::exists(&candidate) {
         ctx.warn(format!(
             "data file {} was not found; the source points to it anyway",
             candidate.display()

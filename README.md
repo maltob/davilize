@@ -99,11 +99,16 @@ Not built yet: multi-user features, a Python bridge, and more connectors (MySQL,
 
 ## Web version
 
-The `web/` folder is a static page that runs reports in the browser. The `dv-wasm` crate compiles `.dvz` reports to SQL with the same Rust code as the CLI, and [DuckDB-Wasm](https://github.com/duckdb/duckdb-wasm) runs the queries. It handles file sources, custom SQL, calculated fields and parameters (default values), but not joins or database sources.
+The same app runs in a browser, with no install and no upload: queries run in [DuckDB-Wasm](https://github.com/duckdb/duckdb-wasm), and the rest of the engine is the Rust `dv-wasm` crate compiled to WebAssembly. It shares the SQL compiler, joins, calculated-field checks, chart specs and HTML/XLSX writers with the CLI and the desktop app, so a report gives the same result everywhere.
+
+What works in the browser: opening and saving `.dvz` reports (picked files, saved as downloads), CSV, Parquet, JSON and Arrow data, joins, calculated fields, parameters, charts, dashboards with shared filters, export to HTML, Excel, CSV, PNG and PDF (through the print dialog), and importing and exporting Tableau workbooks (`.twb`, `.twbx`) and Power BI templates and project folders (`.pbit`, project folder; `.pbix` import reads the report pages only).
+
+What needs the desktop app or the CLI: database sources (SQLite, PostgreSQL), publishing, scheduling, and `.pbix` files with data (their SQLite and XPress9 code is C, which the WebAssembly build leaves out). The browser reads data files you choose, so a report's data files must be chosen together with the report.
 
 ```powershell
 rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli   # same version as wasm-bindgen in Cargo.lock
+cargo build --release -p dv-cli
 bash scripts/build-site.sh       # writes ./site
 ```
 

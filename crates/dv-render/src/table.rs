@@ -2,11 +2,11 @@
 //! JSON, native SVG, XLSX) reads this instead of Arrow directly, so they agree
 //! on types and on which rows are shown.
 
-use duckdb::arrow::array::{Array, ArrayRef, AsArray};
-use duckdb::arrow::compute::cast;
-use duckdb::arrow::datatypes::{DataType, Float64Type, Int64Type, TimeUnit};
-use duckdb::arrow::record_batch::RecordBatch;
-use duckdb::arrow::util::display::array_value_to_string;
+use arrow::array::{Array, ArrayRef, AsArray};
+use arrow::compute::cast;
+use arrow::datatypes::{DataType, Float64Type, Int64Type, TimeUnit};
+use arrow::record_batch::RecordBatch;
+use arrow::util::display::array_value_to_string;
 
 use crate::RenderError;
 

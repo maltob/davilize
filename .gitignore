@@ -27,7 +27,6 @@ Thumbs.db
 
 # Web site build output
 /site/
-/web/pkg/
 
 # Native bundles and release builds
 *.msi
@@ -41,3 +40,7 @@ Thumbs.db
 # Generated outputs
 *.log
 bash.exe.stackdump
+
+# Web build inputs (copied in by scripts/build-site.sh)
+/app/public/pkg/
+/app/public/examples/

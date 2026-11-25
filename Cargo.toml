@@ -22,3 +22,12 @@ opt-level = 3
 
 [profile.test.package.libduckdb-sys]
 opt-level = 3
+
+# The browser build: smaller, not faster. Used by scripts/build-site.sh (`--profile wasm`).
+[profile.wasm]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

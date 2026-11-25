@@ -79,7 +79,7 @@ impl Builder<'_> {
         } else {
             self.report_dir.join(path)
         };
-        let absolute = std::fs::canonicalize(&absolute).unwrap_or(absolute);
+        let absolute = crate::fsx::canonicalize(&absolute).unwrap_or(absolute);
         let Some(columns) = csv_columns(&absolute) else {
             self.warn(format!(
                 "the data file of source '{source}' ({}) could not be read for its columns",
@@ -633,9 +633,9 @@ fn dashboard_page(
 
 fn write_text(path: &Path, text: &str) -> Result<(), InteropError> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(io_err(parent))?;
+        crate::fsx::create_dir_all(parent).map_err(io_err(parent))?;
     }
-    std::fs::write(path, text).map_err(io_err(path))
+    crate::fsx::write(path, text).map_err(io_err(path))
 }
 
 fn write_json(path: &Path, value: &Value) -> Result<(), InteropError> {
@@ -652,7 +652,7 @@ pub(crate) fn export_pbip(
 ) -> Result<Exported, InteropError> {
     let built = build(report, report_dir, None);
     let name = sanitize(&report.name);
-    std::fs::create_dir_all(out).map_err(io_err(out))?;
+    crate::fsx::create_dir_all(out).map_err(io_err(out))?;
 
     write_json(
         &out.join(format!("{name}.pbip")),
@@ -773,6 +773,29 @@ pub(crate) fn export_pbix(
     write_archive(report, report_dir, out, Some(options))
 }
 
+#[cfg(feature = "pbix")]
+fn pbix_data_model(
+    model: &super::Model,
+    queries: &[(String, Vec<String>)],
+    name: &str,
+    values: &std::collections::HashMap<(String, String), Vec<String>>,
+) -> Result<Vec<u8>, InteropError> {
+    super::datamodel::data_model(model, queries, name, values)
+}
+
+#[cfg(not(feature = "pbix"))]
+fn pbix_data_model(
+    _model: &super::Model,
+    _queries: &[(String, Vec<String>)],
+    _name: &str,
+    _values: &std::collections::HashMap<(String, String), Vec<String>>,
+) -> Result<Vec<u8>, InteropError> {
+    Err(InteropError::Unsupported(
+        "writing a .pbix needs the desktop app or the CLI; export a .pbit or a project folder instead"
+            .into(),
+    ))
+}
+
 fn write_archive(
     report: &Report,
     report_dir: &Path,
@@ -822,7 +845,7 @@ fn write_archive(
         }
         parts.push((
             "DataModel",
-            super::datamodel::data_model(&built.model, &built.queries, &report.name, &values)?,
+            pbix_data_model(&built.model, &built.queries, &report.name, &values)?,
         ));
     } else {
         parts.push((
@@ -853,9 +876,9 @@ fn write_archive(
         ),
     ));
     if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent).map_err(io_err(parent))?;
+        crate::fsx::create_dir_all(parent).map_err(io_err(parent))?;
     }
-    let file = std::fs::File::create(out).map_err(io_err(out))?;
+    let file = crate::fsx::create(out).map_err(io_err(out))?;
     let mut zip = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);

@@ -3,7 +3,9 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 // Tauri expects a fixed dev port and no screen clearing so its logs stay visible.
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
+  // The web build is served from a sub-path (GitHub Pages), so asset URLs are relative.
+  base: mode === "web" ? "./" : "/",
   plugins: [react(), tailwindcss()],
   clearScreen: false,
   server: {
@@ -17,4 +19,4 @@ export default defineConfig({
     chunkSizeWarningLimit: 1600,
     emptyOutDir: true,
   },
-});
+}));

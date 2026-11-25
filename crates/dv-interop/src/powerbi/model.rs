@@ -41,7 +41,7 @@ fn is_date(text: &str) -> bool {
 /// Reads a CSV file's header and guesses each column's type from its first rows.
 pub(crate) fn csv_columns(path: &Path) -> Option<Vec<ModelColumn>> {
     use std::io::{BufRead, BufReader};
-    let file = std::fs::File::open(path).ok()?;
+    let file = crate::fsx::open(path).ok()?;
     let mut lines = BufReader::new(file).lines();
     let header = lines.next()?.ok()?;
     let names = split_csv_line(header.trim_start_matches('\u{feff}'));

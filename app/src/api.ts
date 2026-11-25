@@ -16,6 +16,15 @@ import type {
   Report,
   Visual,
 } from "./types";
+import { isWeb } from "./web/platform";
+import { webApi } from "./web/api";
+import {
+  pickDataFilesWeb,
+  pickImportFileWeb,
+  pickProjectFolderWeb,
+  pickReportNameToSaveWeb,
+  pickReportWeb,
+} from "./web/files";
 
 export const DATA_EXTENSIONS = ["csv", "parquet", "json", "jsonl", "ndjson", "arrow", "feather", "ipc"];
 
@@ -26,7 +35,7 @@ export function toApiError(error: unknown): ApiError {
   return { kind: "internal", message: error instanceof Error ? error.message : String(error) };
 }
 
-export const api = {
+const tauriApi = {
   addDataFiles: (existingNames: string[], paths: string[]) =>
     invoke<AddedDataset[]>("add_data_files", { existingNames, paths }),
   openReport: (path: string) => invoke<OpenedReport>("open_report", { path }),
@@ -57,8 +66,12 @@ export const api = {
   createSampleReport: () => invoke<string>("create_sample_report"),
 };
 
+/** In the browser the same calls run on DuckDB-Wasm and the Rust module (see src/web). */
+export const api: typeof tauriApi = isWeb ? (webApi as typeof tauriApi) : tauriApi;
+
 /** Native dialogs. Each returns null when the user cancels. */
 export async function pickDataFiles(): Promise<string[] | null> {
+  if (isWeb) return pickDataFilesWeb(DATA_EXTENSIONS);
   const picked = await open({
     multiple: true,
     filters: [{ name: "Data files", extensions: DATA_EXTENSIONS }],
@@ -67,6 +80,7 @@ export async function pickDataFiles(): Promise<string[] | null> {
 }
 
 export async function pickReportToOpen(): Promise<string | null> {
+  if (isWeb) return pickReportWeb();
   const picked = await open({ multiple: false, filters: [{ name: "Davilize report", extensions: ["dvz"] }] });
   return normalize(picked)?.[0] ?? null;
 }
@@ -75,6 +89,7 @@ export const IMPORT_EXTENSIONS = ["twb", "twbx", "pbit", "pbix"];
 
 /** A Tableau workbook or a Power BI file (.pbit, .pbix). Power BI Project folders are imported with the CLI. */
 export async function pickFileToImport(): Promise<string | null> {
+  if (isWeb) return pickImportFileWeb(IMPORT_EXTENSIONS);
   const picked = await open({
     multiple: false,
     filters: [{ name: "Tableau and Power BI files", extensions: IMPORT_EXTENSIONS }],
@@ -83,6 +98,7 @@ export async function pickFileToImport(): Promise<string | null> {
 }
 
 export async function pickReportToSave(current: string | null): Promise<string | null> {
+  if (isWeb) return pickReportNameToSaveWeb(current);
   return save({
     defaultPath: current ?? "report.dvz",
     filters: [{ name: "Davilize report", extensions: ["dvz"] }],
@@ -90,6 +106,8 @@ export async function pickReportToSave(current: string | null): Promise<string |
 }
 
 export async function pickFolder(): Promise<string | null> {
+  // A browser downloads files instead of writing to a folder.
+  if (isWeb) return "Downloads";
   const picked = await open({ directory: true, multiple: false });
   return normalize(picked)?.[0] ?? null;
 }
@@ -98,3 +116,6 @@ function normalize(picked: string | string[] | null): string[] | null {
   if (picked === null) return null;
   return Array.isArray(picked) ? picked : [picked];
 }
+
+/** A Power BI Project folder (web only: the desktop app takes projects from the CLI). */
+export const pickProjectFolderToImport = pickProjectFolderWeb;

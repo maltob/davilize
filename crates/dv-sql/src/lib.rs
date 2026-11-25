@@ -9,9 +9,14 @@
 //! columns; `aggregate` filters become HAVING predicates over the aggregate
 //! expression of a measure (not its alias, to stay portable).
 
+pub mod calc;
+
 use std::collections::HashSet;
 
-use dv_core::{Aggregate, Filter, FilterOp, FilterScope, Limit, Measure, SortDirection, Visual};
+use dv_core::{
+    Aggregate, Dataset, Filter, FilterOp, FilterScope, JoinKind, Limit, Measure, SortDirection,
+    Visual,
+};
 use serde_json::Value;
 
 /// Errors from compiling a spec to SQL.
@@ -392,6 +397,140 @@ pub fn compile_visual_with(
     }
 
     Ok(sql)
+}
+
+// ---------------------------------------------------------------------------
+// Datasets
+// ---------------------------------------------------------------------------
+
+/// The columns of a relation: `Ok(None)` when the relation does not exist, `Err` for a
+/// relation that cannot be used at all (for example a database source).
+pub type RelationColumns<'a> = &'a dyn Fn(&str) -> Result<Option<Vec<String>>, SqlError>;
+
+/// Builds the SELECT for a dataset with joins. The source is the left side; each join in
+/// order combines the result so far (`"l"`) with its `with` relation (`"r"`).
+///
+/// Left columns keep their names. A right column whose name (case-insensitive) collides
+/// with an existing output column is renamed `<with>_<column>`, then `<with>_<column>_2`,
+/// `_3`, and so on. Join keys are matched to real columns case-insensitively before any
+/// SQL is built. `columns_of` supplies the columns of each relation, so this needs no
+/// database.
+pub fn join_select(dataset: &Dataset, columns_of: RelationColumns<'_>) -> Result<String, SqlError> {
+    let source_relation = format!("SELECT * FROM {}", quote_ident(&dataset.source));
+    let mut left_columns = columns_of(&dataset.source)?.ok_or_else(|| {
+        SqlError::InvalidSpec(format!(
+            "dataset '{}' references unknown source '{}'",
+            dataset.name, dataset.source
+        ))
+    })?;
+    let mut body = source_relation;
+
+    for join in &dataset.joins {
+        let right_columns = columns_of(&join.with)?.ok_or_else(|| {
+            SqlError::InvalidSpec(format!(
+                "dataset '{}' joins unknown source '{}'",
+                dataset.name, join.with
+            ))
+        })?;
+
+        // Resolve every key to the actual spelling of its columns before building SQL.
+        let mut conditions = Vec::with_capacity(join.on.len());
+        for key in &join.on {
+            let left = find_column(&left_columns, &key.left).ok_or_else(|| {
+                SqlError::InvalidSpec(format!(
+                    "join on dataset '{}': column '{}' not found in '{}'",
+                    dataset.name, key.left, dataset.source
+                ))
+            })?;
+            let right = find_column(&right_columns, &key.right).ok_or_else(|| {
+                SqlError::InvalidSpec(format!(
+                    "join on dataset '{}': column '{}' not found in '{}'",
+                    dataset.name, key.right, join.with
+                ))
+            })?;
+            conditions.push(format!(
+                "{}.{} = {}.{}",
+                quote_ident("l"),
+                quote_ident(left),
+                quote_ident("r"),
+                quote_ident(right)
+            ));
+        }
+
+        let mut taken: HashSet<String> = left_columns
+            .iter()
+            .map(|c| c.to_ascii_lowercase())
+            .collect();
+        let mut select = Vec::new();
+        let mut outputs = Vec::new();
+        for column in &left_columns {
+            select.push(format!(
+                "{}.{} AS {}",
+                quote_ident("l"),
+                quote_ident(column),
+                quote_ident(column)
+            ));
+            outputs.push(column.clone());
+        }
+        for column in &right_columns {
+            let output = unique_output_name(column, &join.with, &mut taken);
+            select.push(format!(
+                "{}.{} AS {}",
+                quote_ident("r"),
+                quote_ident(column),
+                quote_ident(&output)
+            ));
+            outputs.push(output);
+        }
+
+        body = format!(
+            "SELECT {} FROM ({body}) AS {} {} JOIN {} AS {} ON {}",
+            select.join(", "),
+            quote_ident("l"),
+            join_keyword(join.kind),
+            quote_ident(&join.with),
+            quote_ident("r"),
+            conditions.join(" AND ")
+        );
+        left_columns = outputs;
+    }
+    Ok(body)
+}
+
+/// The SQL keyword for a join kind.
+fn join_keyword(kind: JoinKind) -> &'static str {
+    match kind {
+        JoinKind::Inner => "INNER",
+        JoinKind::Left => "LEFT",
+        JoinKind::Right => "RIGHT",
+        JoinKind::Full => "FULL OUTER",
+    }
+}
+
+/// The column in `columns` whose name matches `name` ignoring ASCII case.
+fn find_column<'a>(columns: &'a [String], name: &str) -> Option<&'a str> {
+    columns
+        .iter()
+        .find(|c| c.eq_ignore_ascii_case(name))
+        .map(String::as_str)
+}
+
+/// Picks the output name for a right-side column: its own name when free, otherwise
+/// `<with>_<column>`, with `_2`, `_3`, ... appended while that is taken too. Records the
+/// chosen name in `taken` (lowercase).
+fn unique_output_name(column: &str, with: &str, taken: &mut HashSet<String>) -> String {
+    let mut name = column.to_string();
+    if taken.contains(&name.to_ascii_lowercase()) {
+        let base = format!("{with}_{column}");
+        name = base.clone();
+        let mut suffix = 2;
+        while taken.contains(&name.to_ascii_lowercase()) {
+            name = format!("{base}_{suffix}");
+            suffix += 1;
+        }
+    }
+    taken.insert(name.to_ascii_lowercase());
+    name
 }
 
 #[cfg(test)]

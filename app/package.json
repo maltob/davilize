@@ -5,9 +5,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:web": "tsc -b && vite build --mode web",
     "preview": "vite preview",
     "test:layout": "node --experimental-strip-types --test src/layout.test.ts",
-    "test": "node --experimental-strip-types --test src/layout.test.ts src/chartText.test.ts src/history.test.ts src/joins.test.ts",
+    "test": "node --experimental-strip-types --test src/layout.test.ts src/chartText.test.ts src/history.test.ts src/joins.test.ts src/web/names.test.ts",
     "tauri": "tauri"
   },
   "dependencies": {
@@ -15,6 +16,7 @@
     "@tanstack/react-virtual": "3.14.26",
     "@tauri-apps/api": "2.12.5",
     "@tauri-apps/plugin-dialog": "2.8.4",
+    "fflate": "0.8.2",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "vega": "6.4.0",
@@ -32,6 +34,5 @@
     "typescript": "5.9.3",
     "vite": "8.3.8"
   },
-  "private": true,
   "type": "module"
 }

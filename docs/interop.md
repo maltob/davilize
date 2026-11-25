@@ -85,6 +85,19 @@ files for every column type, and Desktop itself opened the files and returned th
 The column file formats are byte-identical to the files Desktop wrote for the same sample
 data.
 
+## In the browser
+
+The web version of the app (see the README) converts Tableau and Power BI files with the same
+code, built for WebAssembly without the `pbix` feature of `dv-interop`. The converters read
+and write through `dv_interop::fsx`, which is `std::fs` natively and an in-memory file store in
+the browser; the page fills the store before an import and collects the files an export wrote.
+
+Works: import and export of `.twb`, `.twbx`, `.pbit` and Power BI Project folders (a folder
+downloads as a zip), and `.pbix` import of the report pages. Not available: writing a `.pbix`
+and reading its compressed data model, because both need C code (SQLite and XPress9).
+Calculated fields from an imported file are checked against the allowlist in the page, one at a
+time, and dropped with a warning when refused, as the desktop app does.
+
 ## What converts
 
 | Davilize | Tableau | Power BI |
