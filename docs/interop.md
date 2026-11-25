@@ -65,6 +65,12 @@ What it stores:
   one; the library function `export` does not, and `export_with` takes an
   `ExportOptions::column_values` callback instead. A report with calculated columns
   exported without one stops with an error.
+- datasets that cannot be flattened to a CSV file (custom SQL, or datasets built on
+  one) as a snapshot of their rows. The CLI and the app run the dataset in the engine
+  and store the result, with the rows also written inline in the table's Power Query
+  so the file opens; Power BI cannot refresh such a table. The library needs
+  `ExportOptions::dataset_columns` for this and otherwise skips the dataset with a
+  warning. Large results make a large query: keep them to some thousands of rows.
 
 Limits:
 
@@ -110,7 +116,8 @@ allowlist and dropped if refused.
 
 - Sources other than CSV when exporting (databases, Parquet, JSON, Arrow). Databases
   and extracts (`.hyper`) are skipped when importing.
-- Custom SQL datasets, row limits, `is_null`-style edge filters in some forms, and
+- Custom SQL datasets in a workbook or Power BI template (a `.pbix` stores a snapshot),
+  row limits, `is_null`-style edge filters in some forms, and
   measure aliases (the output name becomes `<agg>_<field>`).
 - Chart types Davilize lacks (pie, area, map, dual axis, combo): imported as the nearest
   chart, with a warning.

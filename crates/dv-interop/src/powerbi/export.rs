@@ -14,7 +14,7 @@ use super::layout::{
     PAGE_SCHEMA, PAGES_SCHEMA, REPORT_SCHEMA, VERSION_SCHEMA, legacy_layout, visual_to_pbir,
 };
 use super::model::{
-    csv_columns, csv_query, schema_json, tmdl_model, tmdl_relationships, tmdl_table,
+    csv_columns, csv_query, schema_json, snapshot_query, tmdl_model, tmdl_relationships, tmdl_table,
 };
 use super::{
     FieldRef, FilterSpec, Model, ModelColumn, ModelRelationship, ModelTable, PageSpec, VisualSpec,
@@ -49,6 +49,9 @@ struct Builder<'a> {
     dataset_tables: HashMap<String, String>,
     /// Source name -> table name, for tables created for join targets.
     source_tables: HashMap<String, String>,
+    /// Describes a dataset that cannot be flattened to a CSV file, so it can be
+    /// exported as a snapshot of its rows.
+    snapshot: Option<crate::DatasetColumns<'a>>,
 }
 
 impl Builder<'_> {
@@ -93,6 +96,36 @@ impl Builder<'_> {
         let (chain, base) = match dataset_chain(self.report, dataset) {
             Ok(v) => v,
             Err(reason) => {
+                if let Some(describe) = self.snapshot {
+                    match describe(&dataset.name) {
+                        Ok(columns) if !columns.is_empty() => {
+                            self.model.tables.push(ModelTable {
+                                name: dataset.name.clone(),
+                                columns: columns
+                                    .into_iter()
+                                    .map(|(name, data_type)| ModelColumn {
+                                        name,
+                                        data_type,
+                                        expression: None,
+                                    })
+                                    .collect(),
+                                snapshot: true,
+                                ..ModelTable::default()
+                            });
+                            self.dataset_tables
+                                .insert(dataset.name.clone(), dataset.name.clone());
+                            self.warn(format!(
+                                "{reason}: its rows are stored as a snapshot, which Power BI cannot refresh"
+                            ));
+                            return;
+                        }
+                        Ok(_) => self.warn(format!("{reason}: it has no columns")),
+                        Err(e) => {
+                            self.warn(format!("{reason}, and its columns could not be read: {e}"))
+                        }
+                    }
+                    return;
+                }
                 self.warn(format!("{reason}, which cannot be exported to Power BI"));
                 return;
             }
@@ -450,7 +483,7 @@ fn visual_spec(b: &mut Builder<'_>, visual: &Visual) -> Option<VisualSpec> {
     })
 }
 
-fn build(report: &Report, report_dir: &Path) -> Built {
+fn build(report: &Report, report_dir: &Path, snapshot: Option<crate::DatasetColumns<'_>>) -> Built {
     let mut b = Builder {
         report,
         report_dir,
@@ -459,6 +492,7 @@ fn build(report: &Report, report_dir: &Path) -> Built {
         warnings: Vec::new(),
         dataset_tables: HashMap::new(),
         source_tables: HashMap::new(),
+        snapshot,
     };
     for dataset in &report.datasets {
         b.add_dataset(dataset);
@@ -616,7 +650,7 @@ pub(crate) fn export_pbip(
     report_dir: &Path,
     out: &Path,
 ) -> Result<Exported, InteropError> {
-    let built = build(report, report_dir);
+    let built = build(report, report_dir, None);
     let name = sanitize(&report.name);
     std::fs::create_dir_all(out).map_err(io_err(out))?;
 
@@ -745,7 +779,7 @@ fn write_archive(
     out: &Path,
     pbix: Option<&crate::ExportOptions<'_>>,
 ) -> Result<Exported, InteropError> {
-    let built = build(report, report_dir);
+    let mut built = build(report, report_dir, pbix.and_then(|o| o.dataset_columns));
     let layout = serde_json::to_string(&legacy_layout(&built.pages))
         .map_err(|e| InteropError::Format(e.to_string()))?;
     let mut parts: Vec<(&str, Vec<u8>)> = vec![("Version", encode_utf16le("1.28"))];
@@ -755,7 +789,7 @@ fn write_archive(
             for column in table
                 .columns
                 .iter()
-                .filter(|c| c.expression.is_some())
+                .filter(|c| c.expression.is_some() || table.snapshot)
                 .filter(|c| !table.key_columns.iter().any(|(n, _)| *n == c.name))
             {
                 let Some(compute) = options.column_values else {
@@ -771,6 +805,19 @@ fn write_archive(
                     ))
                 })?;
                 values.insert((table.name.clone(), column.name.clone()), cells);
+            }
+        }
+        // A snapshot table has no file to load: its query holds the rows inline.
+        for table in built.model.tables.iter().filter(|t| t.snapshot) {
+            let cells: Vec<&Vec<String>> = table
+                .columns
+                .iter()
+                .filter_map(|c| values.get(&(table.name.clone(), c.name.clone())))
+                .collect();
+            if cells.len() == table.columns.len() {
+                built
+                    .queries
+                    .push((table.name.clone(), snapshot_query(&table.columns, &cells)));
             }
         }
         parts.push((

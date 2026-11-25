@@ -104,8 +104,20 @@ pub fn export_file(input: &Path, format: InteropFormat, out: &Path, log: &Log) -
                 .column_text(dataset, column)
                 .map_err(|e| e.to_string())
         };
+        let describe = |dataset: &str| {
+            engine
+                .schema(dataset)
+                .map(|columns| {
+                    columns
+                        .into_iter()
+                        .map(|c| (c.name, dv_interop::model_type(&c.data_type).to_string()))
+                        .collect()
+                })
+                .map_err(|e| e.to_string())
+        };
         let options = ExportOptions {
             column_values: Some(&compute),
+            dataset_columns: Some(&describe),
         };
         dv_interop::export_with(&report, &report_dir, format.format(), out, &options)
     } else {

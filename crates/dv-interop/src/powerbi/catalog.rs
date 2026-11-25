@@ -486,6 +486,9 @@ fn infer_type(cells: &[&str]) -> &'static str {
 type CalculatedValues = HashMap<(String, String), Vec<String>>;
 
 fn load_table(table: &ModelTable, values: &CalculatedValues) -> Result<TableData, InteropError> {
+    if table.snapshot {
+        return load_snapshot(table, values);
+    }
     let path = table
         .csv_path
         .as_deref()
@@ -585,6 +588,41 @@ fn load_table(table: &ModelTable, values: &CalculatedValues) -> Result<TableData
         rows: rows.len(),
         columns,
     })
+}
+
+/// A table whose rows come from the engine rather than a CSV file.
+fn load_snapshot(table: &ModelTable, values: &CalculatedValues) -> Result<TableData, InteropError> {
+    let mut rows = None;
+    let mut columns = Vec::new();
+    for column in &table.columns {
+        let cells = values
+            .get(&(table.name.clone(), column.name.clone()))
+            .ok_or_else(|| {
+                err(
+                    &table.name,
+                    format!("no values were read for column '{}'", column.name),
+                )
+            })?;
+        if *rows.get_or_insert(cells.len()) != cells.len() {
+            return Err(err(
+                &table.name,
+                format!("column '{}' has a different number of rows", column.name),
+            ));
+        }
+        let cells: Vec<&str> = cells.iter().map(String::as_str).collect();
+        columns.push(encode_column(&table.name, column, &cells)?);
+    }
+    let rows = rows.unwrap_or(0);
+    if rows == 0 {
+        return Err(err(&table.name, "the dataset has no rows"));
+    }
+    if rows > MAX_ROWS {
+        return Err(err(
+            &table.name,
+            format!("more than {MAX_ROWS} rows do not fit one segment"),
+        ));
+    }
+    Ok(TableData { rows, columns })
 }
 
 // --------------------------------------------------------------- catalog

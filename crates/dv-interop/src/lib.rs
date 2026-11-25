@@ -138,10 +138,32 @@ pub fn import(
 /// exported to `.pbix`.
 pub type ColumnValues<'a> = &'a dyn Fn(&str, &str) -> Result<Vec<String>, String>;
 
+/// The model type for a DuckDB column type, as the engine names it.
+pub fn model_type(duckdb_type: &str) -> &'static str {
+    let t = duckdb_type.to_ascii_uppercase();
+    match t.as_str() {
+        "BOOLEAN" => "boolean",
+        "TINYINT" | "SMALLINT" | "INTEGER" | "BIGINT" | "HUGEINT" | "UTINYINT" | "USMALLINT"
+        | "UINTEGER" | "UBIGINT" => "int64",
+        "FLOAT" | "DOUBLE" | "REAL" => "double",
+        "DATE" => "dateTime",
+        _ if t.starts_with("DECIMAL") => "double",
+        _ if t.starts_with("TIMESTAMP") => "dateTime",
+        _ => "string",
+    }
+}
+
+/// The columns of a dataset as `(name, type)` pairs, with types named as the model
+/// names them (`string`, `int64`, `double`, `dateTime`, `boolean`). A dataset that
+/// cannot be flattened to a CSV file (custom SQL, say) is exported to `.pbix` as a
+/// snapshot of its rows, which needs the engine that can run it.
+pub type DatasetColumns<'a> = &'a dyn Fn(&str) -> Result<Vec<(String, String)>, String>;
+
 /// Options for [`export_with`].
 #[derive(Default)]
 pub struct ExportOptions<'a> {
     pub column_values: Option<ColumnValues<'a>>,
+    pub dataset_columns: Option<DatasetColumns<'a>>,
 }
 
 /// Exports a report. `report_dir` is the folder the report was loaded from (its

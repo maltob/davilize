@@ -36,6 +36,9 @@ pub(crate) struct ModelTable {
     /// Calculated columns that join the values of other columns into one text key,
     /// for relationships on several columns: (column name, source columns).
     pub key_columns: Vec<(String, Vec<String>)>,
+    /// A table with no CSV file behind it: every column's values come from the engine
+    /// (a `.pbix` only).
+    pub snapshot: bool,
 }
 
 #[derive(Debug, Clone)]

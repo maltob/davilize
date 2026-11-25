@@ -125,6 +125,82 @@ pub(crate) fn csv_query(path: &str, columns: &[ModelColumn]) -> Vec<String> {
     ]
 }
 
+/// An M query that holds a table's rows inline, for a table whose data has no file
+/// behind it (a snapshot). `cells[column][row]` is one text cell; a blank cell in a
+/// number, date or boolean column is `null`.
+pub(crate) fn snapshot_query(columns: &[ModelColumn], cells: &[&Vec<String>]) -> Vec<String> {
+    fn text(s: &str) -> String {
+        let escaped = s
+            .replace('"', "\"\"")
+            .replace("#(", "#(#)(")
+            .replace('\r', "#(cr)")
+            .replace('\n', "#(lf)");
+        format!("\"{escaped}\"")
+    }
+    fn literal(data_type: &str, cell: &str) -> String {
+        let c = cell.trim();
+        match data_type {
+            "string" => text(cell),
+            _ if c.is_empty() => "null".to_string(),
+            "int64" => c.parse::<i64>().map_or("null".into(), |v| v.to_string()),
+            "double" => c
+                .parse::<f64>()
+                .ok()
+                .filter(|v| v.is_finite())
+                .map_or("null".into(), |v| format!("{v}")),
+            "boolean" => match c.to_ascii_lowercase().as_str() {
+                "true" => "true".into(),
+                "false" => "false".into(),
+                _ => "null".into(),
+            },
+            "dateTime" => {
+                let n = |r: std::ops::Range<usize>| c.get(r).and_then(|p| p.parse::<u32>().ok());
+                match (n(0..4), n(5..7), n(8..10)) {
+                    (Some(y), Some(m), Some(d)) => format!(
+                        "#datetime({y}, {m}, {d}, {}, {}, {})",
+                        n(11..13).unwrap_or(0),
+                        n(14..16).unwrap_or(0),
+                        n(17..19).unwrap_or(0)
+                    ),
+                    _ => "null".into(),
+                }
+            }
+            _ => text(cell),
+        }
+    }
+    let fields: Vec<String> = columns
+        .iter()
+        .map(|c| {
+            let ty = match c.data_type.as_str() {
+                "int64" => "Int64.Type",
+                "double" => "number",
+                "boolean" => "logical",
+                "dateTime" => "datetime",
+                _ => "text",
+            };
+            format!("#\"{}\" = {ty}", c.name.replace('"', "\"\""))
+        })
+        .collect();
+    let rows = cells.first().map_or(0, |c| c.len());
+    let mut out = vec![
+        "let".to_string(),
+        format!("    Source = #table(type table [{}], {{", fields.join(", ")),
+    ];
+    for r in 0..rows {
+        let row: Vec<String> = columns
+            .iter()
+            .zip(cells)
+            .map(|(c, col)| literal(&c.data_type, col.get(r).map_or("", String::as_str)))
+            .collect();
+        let sep = if r + 1 < rows { "," } else { "" };
+        out.push(format!("        {{{}}}{sep}", row.join(", ")));
+    }
+    out.push("    })".to_string());
+    out.push("in".to_string());
+    out.push("    Source".to_string());
+    out
+}
+
 /// Finds the path in `File.Contents("...")` of an M query.
 pub(crate) fn csv_path_from_query(query: &str) -> Option<String> {
     let at = query.find("File.Contents(")?;

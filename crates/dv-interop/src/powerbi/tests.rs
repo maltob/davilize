@@ -137,6 +137,36 @@ fn a_dashboard_parameter_filter_uses_the_default_value() {
 }
 
 #[test]
+fn a_snapshot_table_holds_its_rows_in_the_query() {
+    use super::ModelColumn;
+    use super::model::snapshot_query;
+    let col = |name: &str, ty: &str| ModelColumn {
+        name: name.into(),
+        data_type: ty.into(),
+        expression: None,
+    };
+    let columns = [
+        col("customer", "string"),
+        col("orders", "int64"),
+        col("avg", "double"),
+        col("day", "dateTime"),
+        col("ok", "boolean"),
+    ];
+    let cells: Vec<Vec<String>> = vec![
+        vec!["a \"b\"".into(), "".into()],
+        vec!["2".into(), "".into()],
+        vec!["1.5".into(), "".into()],
+        vec!["2024-01-02 03:04:05".into(), "".into()],
+        vec!["true".into(), "".into()],
+    ];
+    let refs: Vec<&Vec<String>> = cells.iter().collect();
+    let m = snapshot_query(&columns, &refs).join("\n");
+    assert!(m.contains("#table(type table [#\"customer\" = text, #\"orders\" = Int64.Type"));
+    assert!(m.contains("{\"a \"\"b\"\"\", 2, 1.5, #datetime(2024, 1, 2, 3, 4, 5), true},"));
+    assert!(m.contains("{\"\", null, null, null, null}"));
+}
+
+#[test]
 fn a_chart_with_a_legend_keeps_one_value() {
     // Power BI rejects several values on a chart that has a legend.
     let t = round_trip("sample.dvz", Format::Pbit);
@@ -316,6 +346,7 @@ fn tmdl_tables_parse_back() {
         measures: vec![("Total".into(), "SUM('Sales Data'[revenue])".into())],
         csv_path: None,
         key_columns: Vec::new(),
+        snapshot: false,
     };
     let query = vec![
         "let".to_string(),
