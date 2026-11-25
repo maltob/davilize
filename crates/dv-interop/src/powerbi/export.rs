@@ -560,21 +560,35 @@ fn dashboard_page(
                 .iter()
                 .find(|t| t.name == table)
                 .is_some_and(|t| t.columns.iter().any(|c| c.name == f.field));
-            if known
-                && !f
-                    .values
-                    .iter()
-                    .any(|v| dv_core::param_ref(v).ok().flatten().is_some())
-            {
-                spec.filters.push(FilterSpec {
-                    field: FieldRef::Column {
-                        table,
-                        column: f.field.clone(),
-                    },
-                    op: f.op,
-                    values: f.values.clone(),
-                });
+            if !known {
+                continue;
             }
+            // A parameter in a dashboard filter is replaced by its default, as in a
+            // visual's own filters.
+            let mut values = Vec::new();
+            let mut skip = false;
+            for v in &f.values {
+                match param_default(b.report, v) {
+                    Some(Some(default)) => values.push(default),
+                    Some(None) => skip = true,
+                    None => values.push(v.clone()),
+                }
+            }
+            if skip {
+                b.warn(format!(
+                    "the filter on '{}' in dashboard '{}' uses a parameter without a default and was skipped",
+                    f.field, dashboard.id
+                ));
+                continue;
+            }
+            spec.filters.push(FilterSpec {
+                field: FieldRef::Column {
+                    table,
+                    column: f.field.clone(),
+                },
+                op: f.op,
+                values,
+            });
         }
         page.visuals.push(spec);
     }

@@ -122,6 +122,21 @@ fn dashboards_and_filters_round_trip_through_a_template() {
 }
 
 #[test]
+fn a_dashboard_parameter_filter_uses_the_default_value() {
+    // The sample dashboards filter on region = the "region" parameter (default North).
+    let t = round_trip("sample_dashboard.dvz", Format::Pbit);
+    let visual = t
+        .back
+        .visuals
+        .iter()
+        .find(|v| v.title == "Revenue by region")
+        .unwrap();
+    let region = visual.filters.iter().find(|f| f.field == "region");
+    assert!(region.is_some(), "{:?}", visual.filters);
+    assert_eq!(region.unwrap().values[0], serde_json::json!("North"));
+}
+
+#[test]
 fn a_chart_with_a_legend_keeps_one_value() {
     // Power BI rejects several values on a chart that has a legend.
     let t = round_trip("sample.dvz", Format::Pbit);
