@@ -7,15 +7,18 @@
     "build": "tsc -b && vite build",
     "build:web": "tsc -b && vite build --mode web",
     "preview": "vite preview",
+    "test:e2e": "playwright test",
     "test:layout": "node --experimental-strip-types --test src/layout.test.ts",
     "test": "node --experimental-strip-types --test src/layout.test.ts src/chartText.test.ts src/history.test.ts src/joins.test.ts src/web/names.test.ts",
     "tauri": "tauri"
   },
   "dependencies": {
+    "@duckdb/duckdb-wasm": "1.32.0",
     "@tanstack/react-table": "8.21.3",
     "@tanstack/react-virtual": "3.14.28",
     "@tauri-apps/api": "2.12.5",
     "@tauri-apps/plugin-dialog": "2.8.4",
+    "apache-arrow": "17.0.0",
     "fflate": "0.8.3",
     "react": "19.3.1",
     "react-dom": "19.3.1",
@@ -24,6 +27,7 @@
     "vega-lite": "6.5.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.65.1",
     "@tailwindcss/vite": "4.3.5",
     "@tauri-apps/cli": "2.12.6",
     "@types/node": "24.19.2",

@@ -44,3 +44,7 @@ bash.exe.stackdump
 # Web build inputs (copied in by scripts/build-site.sh)
 /app/public/pkg/
 /app/public/examples/
+
+# Browser test output
+/app/playwright-report/
+/app/test-results/

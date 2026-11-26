@@ -7,12 +7,12 @@
 # chart specs, HTML and XLSX writers) is the Rust `dv-wasm` crate compiled to WebAssembly.
 #
 # Needs: the wasm32-unknown-unknown Rust target, wasm-bindgen-cli matching the wasm-bindgen
-# version in Cargo.lock, Node with npm, and a built davilize CLI (pass its path as
-# $DAVILIZE, default target/release/davilize).
+# version in Cargo.lock, and Node with npm. A built davilize CLI (path in $DAVILIZE) is optional:
+# with it the site also gets HTML renderings of the examples under samples/.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-DAVILIZE="${DAVILIZE:-target/release/davilize}"
+DAVILIZE="${DAVILIZE:-}"
 SITE=site
 
 # 1. The Rust side, as WebAssembly, served next to the app.
@@ -47,7 +47,10 @@ find "$SITE" -mindepth 1 -delete
 cp -r app/dist/. "$SITE/"
 touch "$SITE/.nojekyll"
 
-# 4. HTML renderings of the examples that need no database.
+# 4. HTML renderings of the examples that need no database. They come from the davilize CLI, whose
+# build (it compiles DuckDB) is the slowest part of a cold CI run, so they are only written when a
+# built CLI is given: DAVILIZE=target/release/davilize bash scripts/build-site.sh
+if [ -n "$DAVILIZE" ] && { [ -f "$DAVILIZE" ] || [ -f "$DAVILIZE.exe" ]; }; then
 mkdir -p "$SITE/samples"
 items=""
 for report in sample sample_dashboard sample_joined sample_params sample_scheduled; do
@@ -64,5 +67,8 @@ cat > "$SITE/samples/index.html" <<HTML
 <ul>$items</ul>
 </body></html>
 HTML
+else
+  echo "skipping the rendered samples (no davilize binary; set DAVILIZE to include them)"
+fi
 
 echo "site built in $SITE"

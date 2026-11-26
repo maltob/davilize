@@ -107,7 +107,7 @@ What needs the desktop app or the CLI: PostgreSQL sources (a browser cannot open
 
 Other differences in the browser:
 
-- **Network on first use.** DuckDB-Wasm loads from a CDN (a pinned version), so the page does not work offline. The chart library is part of the page. The WebAssembly module itself is about 7 MB.
+- **Works offline after the first visit.** DuckDB-Wasm and the app are served from the same place as the page, with no third-party requests, and a service worker stores them. The first visit downloads about 42 MB (about 8 MB compressed), after which the page opens and runs with no network. When a new version is published the page offers a Reload button instead of swapping files under an open report.
 - **Kept in this browser.** Files you pick and reports you save are stored in the browser's private storage (OPFS), so they are still there after a reload; the start page lists them and has a button that clears everything. DuckDB reads stored data files in slices rather than loading them into memory. Where the browser refuses storage (a private window, a full disk), files last for the session only.
 - **Open a report with its data.** A report names its data files, so choose them together with the `.dvz` the first time. After that the browser has them.
 - **SQLite sources.** A report's database source names a connection, and the browser has no environment variables, so choose a file named after the connection (`sample_db.sqlite`, `.sqlite3` or `.db`) together with the report. The whole database is copied into memory while the report is open, and column types follow the declared types (a value that does not fit turns its column into text). DuckDB's own SQLite extension loads in the browser but cannot open files the page provides, so a small WebAssembly SQLite reader is used instead.
@@ -124,4 +124,6 @@ cargo build --release -p dv-cli
 bash scripts/build-site.sh       # writes ./site
 ```
 
-The `Web site` workflow builds the same folder and deploys it to GitHub Pages on every push to `main`. In the repository settings, set Pages to deploy from GitHub Actions.
+Browser tests (Playwright, in `app/e2e`) open the built site and check the sample, a join, calculated fields, a SQLite source, every export format, a Tableau and Power BI import, persistence across a reload, and working offline with no requests to other sites. After `bash scripts/build-site.sh`, run `cd app && npx playwright test`; add `PW_CHANNEL=chrome` to use an installed Chrome instead of downloading a browser.
+
+The `Web site` workflow builds the same folder, runs the browser tests, and deploys it to GitHub Pages on every push to `main`. In the repository settings, set Pages to deploy from GitHub Actions.

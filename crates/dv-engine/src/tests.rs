@@ -99,11 +99,19 @@ fn first_count(engine: &Engine, sql: &str) -> i64 {
 /// Creates a SQLite file with two tables through DuckDB's sqlite extension.
 /// Needs the extension, which DuckDB downloads on first use.
 fn sqlite_fixture(path: &Path) {
+    // Tests run in parallel, and several installing the extension at once race on the same file
+    // in ~/.duckdb (a rename that fails with "Access is denied" on Windows). Install one at a time.
+    static INSTALL: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let maker = duckdb::Connection::open_in_memory().unwrap();
+    {
+        let _one_at_a_time = INSTALL.lock().unwrap_or_else(|e| e.into_inner());
+        maker.execute_batch("INSTALL sqlite; LOAD sqlite;").expect(
+            "creating the SQLite fixture needs the DuckDB sqlite extension (network on first use)",
+        );
+    }
     maker
         .execute_batch(&format!(
-            "INSTALL sqlite; LOAD sqlite; \
-             ATTACH {} AS fx (TYPE sqlite); \
+            "ATTACH {} AS fx (TYPE sqlite); \
              CREATE TABLE fx.orders (id INTEGER, region VARCHAR, units INTEGER); \
              INSERT INTO fx.orders VALUES (1, 'North', 3), (2, 'South', 5), (3, 'North', 2), (4, 'West', 7); \
              CREATE TABLE fx.customers (name VARCHAR); \

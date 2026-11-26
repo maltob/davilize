@@ -1,7 +1,9 @@
-// DuckDB-Wasm, loaded from a CDN on first use (the same way exported HTML pages load Vega).
+// DuckDB-Wasm, served with the app (no CDN), so the page works offline once it is cached by the
+// service worker. Only the "eh" build is shipped: every current browser supports WebAssembly
+// exceptions. The library loads on first use, in its own chunk.
 
-const DUCKDB = "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.32.0";
-const ARROW = "https://cdn.jsdelivr.net/npm/apache-arrow@17.0.0/+esm";
+import engine from "@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url";
+import worker from "@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export interface Duck {
@@ -15,17 +17,9 @@ let loading: Promise<Duck> | undefined;
 
 export function duck(): Promise<Duck> {
   loading ??= (async () => {
-    const [duckdb, arrow] = await Promise.all([
-      import(/* @vite-ignore */ `${DUCKDB}/+esm`),
-      import(/* @vite-ignore */ ARROW),
-    ]);
-    const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
-    const workerUrl = URL.createObjectURL(
-      new Blob([`importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }),
-    );
-    const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING), new Worker(workerUrl));
-    await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-    URL.revokeObjectURL(workerUrl);
+    const [duckdb, arrow]: any[] = await Promise.all([import("@duckdb/duckdb-wasm"), import("apache-arrow")]);
+    const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING), new Worker(worker));
+    await db.instantiate(engine);
     const conn = await db.connect();
     return { db, conn, arrow, duckdb };
   })();
