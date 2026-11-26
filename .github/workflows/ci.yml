@@ -75,4 +75,7 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - name: Build dv-wasm
-        run: cargo build -p dv-wasm --target wasm32-unknown-unknown --release
+        shell: bash
+        run: |
+          source scripts/wasm-env.sh
+          cargo build -p dv-wasm --target wasm32-unknown-unknown --release

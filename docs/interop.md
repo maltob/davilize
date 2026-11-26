@@ -88,15 +88,23 @@ data.
 ## In the browser
 
 The web version of the app (see the README) converts Tableau and Power BI files with the same
-code, built for WebAssembly without the `pbix` feature of `dv-interop`. The converters read
-and write through `dv_interop::fsx`, which is `std::fs` natively and an in-memory file store in
-the browser; the page fills the store before an import and collects the files an export wrote.
+code, built for WebAssembly. The converters read and write through `dv_interop::fsx`, which is
+`std::fs` natively and an in-memory file store in the browser; the page fills the store before an
+import and collects the files an export wrote.
 
 Works: import and export of `.twb`, `.twbx`, `.pbit` and Power BI Project folders (a folder
-downloads as a zip), and `.pbix` import of the report pages. Not available: writing a `.pbix`
-and reading its compressed data model, because both need C code (SQLite and XPress9).
+downloads as a zip), `.pbix` export (data included), and `.pbix` import of the report pages.
+Not available: reading a `.pbix` data model, because `ripbi-core` reads it from file paths.
 Calculated fields from an imported file are checked against the allowlist in the page, one at a
 time, and dropped with a warning when refused, as the desktop app does.
+
+The `.pbix` writer needs SQLite and the XPress9 compressor, both C. SQLite comes from the
+`sqlite-wasm-rs` crate (rusqlite's `ffi-sqlite-wasm-rs` feature), and the catalog is built in
+memory and serialized, so no file is needed. XPress9 compiles with the small libc shim that the
+`zstd-sys` crate already ships; `scripts/wasm-env.sh` points the C compiler at it and defines
+`__rdtsc`, which XPress9 only uses to seed a statistics signature. Source that script before any
+`cargo build --target wasm32-unknown-unknown` of `dv-wasm`. A `.pbix` built in the browser loads
+in the Power BI engine and returns the same figures as the native writer.
 
 ## What converts
 

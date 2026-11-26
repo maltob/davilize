@@ -12,9 +12,16 @@ crate-type = ["cdylib", "rlib"]
 dv-core = { path = "../dv-core" }
 dv-sql = { path = "../dv-sql" }
 dv-render = { path = "../dv-render" }
-# No `pbix` feature: its SQLite and XPress9 C code does not build for WebAssembly.
-dv-interop = { path = "../dv-interop", default-features = false }
+# Building for WebAssembly needs the C flags from scripts/wasm-env.sh (XPress9 needs a libc shim).
+dv-interop = { path = "../dv-interop" }
 arrow.workspace = true
+chrono.workspace = true
+# Reads SQLite files for database sources in the browser (see src/sqlite.rs).
+rusqlite = { version = "0.41", default-features = false, features = ["bundled", "serialize", "column_decltype", "ffi-sqlite-wasm-rs"] }
 serde.workspace = true
 serde_json.workspace = true
 wasm-bindgen = "0.2"
+
+# SQLite's host functions (clock, entropy, local time) come from JavaScript via wasm-bindgen.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+sqlite-wasm-rs = { version = "0.6", default-features = false, features = ["wasm-bindgen"] }

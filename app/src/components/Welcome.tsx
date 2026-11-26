@@ -1,9 +1,14 @@
 import { useEffect, useRef } from "react";
 
+import { isWeb } from "../web/platform";
+import { StoredFiles } from "./StoredFiles";
+
 interface WelcomeProps {
   onOpenData(): void;
   onOpenReport(): void;
   onOpenSample(): void;
+  /** Opens a report the browser kept from an earlier visit (web version). */
+  onOpenStored?(name: string): void;
   busy: boolean;
 }
 
@@ -18,7 +23,7 @@ const STEPS: { title: string; detail: string }[] = [
 let firstScreen = true;
 
 /** Empty state shown when no data is loaded. Offers three starting actions and a short checklist. */
-export function Welcome({ onOpenData, onOpenReport, onOpenSample, busy }: WelcomeProps) {
+export function Welcome({ onOpenData, onOpenReport, onOpenSample, onOpenStored, busy }: WelcomeProps) {
   const primary = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -68,6 +73,8 @@ export function Welcome({ onOpenData, onOpenReport, onOpenSample, busy }: Welcom
           Open a report
         </button>
       </div>
+
+      {isWeb && onOpenStored && <StoredFiles onOpen={onOpenStored} busy={busy} />}
 
       <section aria-labelledby="welcome-steps-heading" className="flex flex-col gap-2 border-t border-border pt-4">
         <h2 id="welcome-steps-heading" className="text-sm font-semibold text-text">

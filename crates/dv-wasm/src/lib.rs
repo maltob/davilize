@@ -12,6 +12,8 @@
 use std::collections::BTreeMap;
 use std::io::Cursor;
 
+mod sqlite;
+
 use arrow::ipc::reader::StreamReader;
 use arrow::record_batch::RecordBatch;
 use dv_core::{
@@ -536,6 +538,89 @@ pub fn interop_export(report_json: &str, format: &str, out: &str) -> String {
         .map_err(|e| e.to_string())?;
         Ok(json!({ "files": files_under(out), "warnings": exported.warnings }))
     })
+}
+
+/// Writes a report as a `.pbix`, which holds its data. Two things come from the page because
+/// they need the query engine: the values of every calculated column and of every column of a
+/// custom-SQL dataset (stored as a snapshot), as text cells with blanks as empty strings; and
+/// the columns of each dataset with their DuckDB types.
+///
+/// * `values_json`: `{dataset: {column: [cell, ...]}}`
+/// * `columns_json`: `{dataset: [[column, duckdb_type], ...]}`
+///
+/// Returns `{"files", "warnings"}` like [`interop_export`].
+#[wasm_bindgen]
+pub fn interop_export_pbix(
+    report_json: &str,
+    out: &str,
+    values_json: &str,
+    columns_json: &str,
+) -> String {
+    respond(|| {
+        let report: Report = parse("report", report_json)?;
+        let values: BTreeMap<String, BTreeMap<String, Vec<String>>> =
+            parse("column values", values_json)?;
+        let columns: BTreeMap<String, Vec<(String, String)>> =
+            parse("dataset columns", columns_json)?;
+        let compute = |dataset: &str, column: &str| {
+            values
+                .get(dataset)
+                .and_then(|by_column| by_column.get(column))
+                .cloned()
+                .ok_or_else(|| format!("no values were computed for {dataset}.{column}"))
+        };
+        let describe = |dataset: &str| {
+            columns
+                .get(dataset)
+                .map(|list| {
+                    list.iter()
+                        .map(|(name, kind)| {
+                            (name.clone(), dv_interop::model_type(kind).to_string())
+                        })
+                        .collect()
+                })
+                .ok_or_else(|| format!("no columns were described for {dataset}"))
+        };
+        let options = dv_interop::ExportOptions {
+            column_values: Some(&compute),
+            dataset_columns: Some(&describe),
+        };
+        let exported = dv_interop::export_with(
+            &report,
+            std::path::Path::new(""),
+            dv_interop::Format::Pbix,
+            std::path::Path::new(out),
+            &options,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(json!({ "files": files_under(out), "warnings": exported.warnings }))
+    })
+}
+
+// ---------------------------------------------------------------------------
+// SQLite database sources
+// ---------------------------------------------------------------------------
+
+/// Opens a SQLite file from its bytes (read only) and keeps it under `name`. Returns
+/// `{"tables": [...]}`: its tables and views.
+#[wasm_bindgen]
+pub fn sqlite_open(name: &str, bytes: &[u8]) -> String {
+    respond(|| {
+        let tables = sqlite::open(name, bytes)?;
+        Ok(json!({ "tables": tables }))
+    })
+}
+
+/// One table or view of an opened SQLite database, as an Arrow IPC stream (throws on failure).
+#[wasm_bindgen]
+pub fn sqlite_table_ipc(name: &str, table: &str) -> Result<Vec<u8>, JsError> {
+    sqlite::table_ipc(name, table).map_err(|e| JsError::new(&e))
+}
+
+/// Forgets a database opened with [`sqlite_open`], freeing its memory.
+#[wasm_bindgen]
+pub fn sqlite_close(name: &str) {
+    sqlite::close(name);
 }
 
 #[cfg(test)]

@@ -285,7 +285,7 @@ mod imp {
 
     pub use super::memfs::{File, create_dir_all, exists, is_dir, is_file, read, read_dir, write};
 
-    pub fn read_to_string(path: &Path) -> io::Result<String> {
+    pub fn read_to_string(path: impl AsRef<Path>) -> io::Result<String> {
         String::from_utf8(read(path)?)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
     }

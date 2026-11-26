@@ -22,7 +22,18 @@ import type {
 import { duck } from "./duck";
 import { family, outputStem, relationBase, uniqueRelation } from "./names";
 import { assetUrl } from "./platform";
-import { allFiles, baseName, download, downloadAll, getFile, hasFile, putFile, rawFilesUnder } from "./files";
+import {
+  baseName,
+  databaseFileFor,
+  download,
+  downloadAll,
+  fileEntry,
+  hasFile,
+  putFile,
+  rawFilesUnder,
+  readFile,
+  smallFiles,
+} from "./files";
 import { apiError, unwrap, wasm } from "./wasm";
 
 const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
@@ -85,6 +96,10 @@ class WebEngine {
   private calculated = new Map<string, Set<string>>();
   /** Views created for the open report, dropped when another report opens. */
   private views: string[] = [];
+  /** Other statements that undo what opening the report created (database schemas and their tables). */
+  private cleanup: string[] = [];
+  /** Names of database sources: they expose several tables, so a dataset needs SQL to pick one. */
+  private databaseSources = new Set<string>();
 
   private async run(sql: string): Promise<any> {
     const { conn } = await duck();
@@ -121,16 +136,15 @@ class WebEngine {
   // ---- sources and datasets ----
 
   async registerSource(source: Source): Promise<void> {
-    if (source.type !== "file") {
-      throw apiError("source", `Database source '${source.name}' needs the desktop app or the CLI.`);
-    }
-    const bytes = getFile(source.path);
-    if (!bytes) {
+    if (source.type !== "file") return this.registerDatabase(source);
+    const entry = await fileEntry(source.path);
+    if (!entry) {
       throw apiError("io", `file not found: ${baseName(source.path)}. Choose it again with Add data or Open.`);
     }
-    const { db, conn, arrow } = await duck();
+    const { db, conn, arrow, duckdb } = await duck();
     const view = quote(source.name);
     if (source.format === "arrow") {
+      const bytes = entry instanceof File ? new Uint8Array(await entry.arrayBuffer()) : entry;
       const ipc = arrow.tableToIPC(arrow.tableFromIPC(bytes), "stream");
       const table = `${source.name}__arrow`;
       await conn.query(`DROP TABLE IF EXISTS ${quote(table)}`);
@@ -138,13 +152,59 @@ class WebEngine {
       await conn.query(`CREATE OR REPLACE VIEW ${view} AS SELECT * FROM ${quote(table)}`);
     } else {
       const name = baseName(source.path);
-      // The worker takes ownership of the buffer it is given, so hand it a copy.
-      await db.registerFileBuffer(name, bytes.slice());
+      if (entry instanceof File) {
+        // DuckDB reads the file in slices as the query needs them: nothing is copied into memory.
+        await db.registerFileHandle(name, entry, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
+      } else {
+        // The worker takes ownership of the buffer it is given, so hand it a copy.
+        await db.registerFileBuffer(name, entry.slice());
+      }
       await conn.query(
         `CREATE OR REPLACE VIEW ${view} AS SELECT * FROM ${READERS[source.format]}(${literal(name)})`,
       );
     }
     if (!this.views.includes(source.name)) this.views.push(source.name);
+  }
+
+  /**
+   * A SQLite database source: its tables become views in a schema named after the source, as the
+   * desktop engine does. The file is read by SQLite itself (in WebAssembly), and each table is
+   * copied into DuckDB, so the whole database is held in memory while the report is open.
+   */
+  private async registerDatabase(source: Extract<Source, { type: "database" }>): Promise<void> {
+    if (source.kind !== "sqlite") {
+      throw apiError(
+        "source",
+        `The ${source.kind} source '${source.name}' needs the desktop app or the CLI: a browser cannot open a database connection.`,
+      );
+    }
+    const file = await databaseFileFor(source.connection);
+    const bytes = file ? await readFile(file) : undefined;
+    if (!file || !bytes) {
+      throw apiError(
+        "io",
+        `The source '${source.name}' reads the SQLite database for the connection '${source.connection}'. Choose a file named ${source.connection}.sqlite (or .db, .sqlite3) together with the report.`,
+      );
+    }
+    const w = await wasm();
+    const { conn } = await duck();
+    const opened = unwrap<{ tables: string[] }>(w.sqlite_open(source.name, bytes));
+    const schema = quote(source.name);
+    try {
+      await conn.query(`CREATE SCHEMA IF NOT EXISTS ${schema}`);
+      this.cleanup.push(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+      for (const [index, table] of opened.tables.entries()) {
+        const ipc = w.sqlite_table_ipc(source.name, table);
+        const physical = quote(`__sqlite_${source.name}__${index}`);
+        await conn.query(`DROP TABLE IF EXISTS ${physical}`);
+        await conn.insertArrowFromIPCStream(ipc, { name: `__sqlite_${source.name}__${index}`, create: true });
+        this.cleanup.push(`DROP TABLE IF EXISTS ${physical}`);
+        await conn.query(`CREATE OR REPLACE VIEW ${schema}.${quote(table)} AS SELECT * FROM ${physical}`);
+      }
+    } finally {
+      w.sqlite_close(source.name);
+    }
+    this.databaseSources.add(source.name);
   }
 
   /** Checks a calculated-field expression against the allowlist, using DuckDB's own parser. */
@@ -161,6 +221,22 @@ class WebEngine {
     unwrap(w.check_dataset(JSON.stringify(dataset)));
     const relations: Record<string, string[]> = {};
     const joins = dataset.joins ?? [];
+    // A database source exposes several tables, so it is not one relation a dataset can read or join.
+    for (const relation of [dataset.source, ...joins.map((j) => j.with)]) {
+      if (!this.databaseSources.has(relation)) continue;
+      if (joins.length > 0) {
+        throw apiError(
+          "invalid",
+          `dataset '${dataset.name}' cannot use database source '${relation}' in a join: it exposes several tables; join a dataset with an sql query instead`,
+        );
+      }
+      if (!dataset.sql) {
+        throw apiError(
+          "invalid",
+          `dataset '${dataset.name}' needs an sql query: database source '${relation}' exposes several tables`,
+        );
+      }
+    }
     if (joins.length > 0) {
       for (const relation of new Set([dataset.source, ...joins.map((j) => j.with)])) {
         const described = await this.describeOrNull(`SELECT * FROM ${quote(relation)}`);
@@ -213,11 +289,17 @@ class WebEngine {
 
   /** Opens a report: drops the previous report's views, then registers sources and datasets. */
   async openReport(path: string): Promise<OpenedReport> {
-    const bytes = getFile(path);
+    const bytes = await readFile(path);
     if (!bytes) throw apiError("io", `file not found: ${baseName(path)}`);
     const w = await wasm();
     const report = unwrap<{ report: Report }>(w.open_report(new TextDecoder().decode(bytes))).report;
-    const missing = report.sources.flatMap((s) => (s.type === "file" && !getFile(s.path) ? [baseName(s.path)] : []));
+    const missing: string[] = [];
+    for (const source of report.sources) {
+      if (source.type === "file" && !hasFile(source.path)) missing.push(baseName(source.path));
+      if (source.type === "database" && source.kind === "sqlite" && !(await databaseFileFor(source.connection))) {
+        missing.push(`${source.connection}.sqlite`);
+      }
+    }
     if (missing.length > 0) {
       throw apiError(
         "io",
@@ -227,7 +309,10 @@ class WebEngine {
     for (const view of [...this.views].reverse()) {
       await this.run(`DROP VIEW IF EXISTS ${quote(view)} CASCADE`);
     }
+    for (const statement of [...this.cleanup].reverse()) await this.run(statement);
     this.views = [];
+    this.cleanup = [];
+    this.databaseSources.clear();
     this.calculated.clear();
     for (const source of report.sources) await this.registerSource(source);
     const datasets = [];
@@ -242,10 +327,11 @@ class WebEngine {
     const w = await wasm();
     w.vfs_clear();
     const folder = rawFilesUnder(path);
-    const file = getFile(path);
+    const file = await readFile(path);
     if (folder.length === 0 && !file) throw apiError("io", `file not found: ${baseName(path)}`);
-    // The converters look for the data files next to the file they read.
-    for (const [name, bytes] of allFiles()) w.vfs_put(name, bytes);
+    // The converters look for the data files next to the file they read (they read from an
+    // in-memory copy, so files over 25 MB are left out).
+    for (const [name, bytes] of await smallFiles(25_000_000)) w.vfs_put(name, bytes);
     for (const [name, bytes] of folder) w.vfs_put(name, bytes);
     const result = unwrap<{ report: Report; warnings: string[]; files: string[] }>(w.interop_import(path, "imported"));
     const warnings = [...result.warnings];
@@ -320,6 +406,12 @@ class WebEngine {
       .toArray()
       .map((row: any) => columns.map((c) => (row[c.name] === null ? null : String(row[c.name]))));
     return { columns: columns.map((c) => ({ name: c.name, data_type: c.type })), rows };
+  }
+
+  /** One column as text cells (blank for NULL), the way the .pbix writer reads calculated values. */
+  private async columnText(dataset: string, column: string): Promise<string[]> {
+    const table = await this.run(`SELECT CAST(${quote(column)} AS VARCHAR) AS v FROM ${quote(dataset)}`);
+    return table.toArray().map((row: any) => (row.v === null ? "" : String(row.v)));
   }
 
   previewDataset(dataset: string, limit: number): Promise<QueryTable> {
@@ -440,11 +532,41 @@ class WebEngine {
           holder.remove();
         }
       }
+    } else if (format === "pbix") {
+      w.vfs_clear();
+      for (const source of report.sources) {
+        const data = source.type === "file" ? await readFile(source.path) : undefined;
+        if (source.type === "file" && data) w.vfs_put(baseName(source.path), data);
+      }
+      // A .pbix stores data. The engine supplies what Rust cannot compute itself: the values
+      // of calculated columns, and every column of a custom-SQL dataset (kept as a snapshot).
+      const values: Record<string, Record<string, string[]>> = {};
+      const described: Record<string, [string, string][]> = {};
+      for (const dataset of report.datasets) {
+        const cols = await this.describe(`SELECT * FROM ${quote(dataset.name)}`);
+        described[dataset.name] = cols.map((c) => [c.name, c.type]);
+        const calculated = new Set((dataset.calculated_fields ?? []).map((f) => f.name));
+        for (const c of cols) {
+          if (!dataset.sql && !calculated.has(c.name)) continue;
+          values[dataset.name] ??= {};
+          values[dataset.name]![c.name] = await this.columnText(dataset.name, c.name);
+        }
+      }
+      const out = `${stem}.pbix`;
+      const written = unwrap<{ files: string[]; warnings: string[] }>(
+        w.interop_export_pbix(JSON.stringify(report), out, JSON.stringify(values), JSON.stringify(described)),
+      );
+      for (const name of written.files) {
+        const bytes = w.vfs_take(name);
+        if (bytes) files.push({ name, bytes });
+      }
+      w.vfs_clear();
+      return { files: downloadAll(`${stem}-pbix.zip`, files), warnings: written.warnings };
     } else if (["twb", "twbx", "pbit", "pbip"].includes(format)) {
       w.vfs_clear();
       // Workbooks pack their data, and Power BI models read column types from it.
       for (const source of report.sources) {
-        const data = source.type === "file" ? getFile(source.path) : undefined;
+        const data = source.type === "file" ? await readFile(source.path) : undefined;
         if (source.type === "file" && data) w.vfs_put(baseName(source.path), data);
       }
       const out = format === "pbip" ? `${stem}_pbip` : `${stem}.${format}`;
@@ -461,7 +583,7 @@ class WebEngine {
     } else {
       throw apiError(
         "invalid",
-        `The ${format} format needs the desktop app or the CLI. The web page writes HTML, Excel, CSV, PNG, PDF (through the print dialog), and Tableau and Power BI template or project files.`,
+        `The ${format} format needs the desktop app or the CLI. The web page writes HTML, Excel, CSV, PNG, PDF (through the print dialog), and Tableau and Power BI files.`,
       );
     }
     const written = downloadAll(`${stem}-${format}.zip`, files);

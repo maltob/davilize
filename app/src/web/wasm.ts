@@ -36,6 +36,10 @@ interface DvWasm {
   vfs_list(): string;
   interop_import(path: string, outDir: string): string;
   interop_export(reportJson: string, format: string, out: string): string;
+  sqlite_open(name: string, bytes: Uint8Array): string;
+  sqlite_table_ipc(name: string, table: string): Uint8Array;
+  sqlite_close(name: string): void;
+  interop_export_pbix(reportJson: string, out: string, valuesJson: string, columnsJson: string): string;
 }
 
 let loading: Promise<DvWasm> | undefined;

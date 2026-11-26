@@ -16,6 +16,8 @@ DAVILIZE="${DAVILIZE:-target/release/davilize}"
 SITE=site
 
 # 1. The Rust side, as WebAssembly, served next to the app.
+# shellcheck source=scripts/wasm-env.sh
+source scripts/wasm-env.sh
 cargo build -p dv-wasm --target wasm32-unknown-unknown --profile wasm
 mkdir -p app/public/pkg app/public/examples
 wasm-bindgen --target web --no-typescript --out-dir app/public/pkg \
@@ -23,6 +25,19 @@ wasm-bindgen --target web --no-typescript --out-dir app/public/pkg \
 
 # 2. Example reports and their data, for "Try the sample report".
 cp examples/*.dvz examples/*.csv app/public/examples/
+# The database sample reads a SQLite file named after its connection (sample_db.sqlite).
+_py=""
+for _candidate in python3 python; do
+  if "$_candidate" -c "" >/dev/null 2>&1; then _py="$_candidate"; break; fi
+done
+rm -f app/public/examples/sample_db.sqlite
+"$_py" - <<'PY'
+import sqlite3
+db = sqlite3.connect("app/public/examples/sample_db.sqlite")
+db.executescript(open("examples/sample_sqlite.sql", encoding="utf-8").read())
+db.commit()
+db.close()
+PY
 
 # 3. The app.
 (cd app && npm ci && npm run build:web)

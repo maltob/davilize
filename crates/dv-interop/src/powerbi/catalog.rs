@@ -7,7 +7,6 @@
 //! measures and relationships.
 
 use std::collections::HashMap;
-use std::io::Read;
 
 use rusqlite::{Connection, params_from_iter, types::Value};
 
@@ -216,10 +215,7 @@ fn parse_date(s: &str) -> Option<f64> {
 
 /// Reads a CSV file into its header and rows.
 fn read_csv(path: &str) -> Result<(Vec<String>, Vec<Vec<String>>), InteropError> {
-    let mut raw = String::new();
-    std::fs::File::open(path)
-        .and_then(|mut f| f.read_to_string(&mut raw))
-        .map_err(|e| err(path, e))?;
+    let raw = crate::fsx::read_to_string(path).map_err(|e| err(path, e))?;
     let mut lines = raw.trim_start_matches('\u{feff}').lines();
     let header =
         super::model::split_csv_line(lines.next().ok_or_else(|| err(path, "the file is empty"))?);
@@ -701,20 +697,17 @@ pub(super) fn build(
         .iter()
         .map(|t| load_table(t, values))
         .collect::<Result<_, _>>()?;
-    let file = tempfile::NamedTempFile::new().map_err(|e| err("temporary file", e))?;
-    let files = {
-        let conn = Connection::open(file.path()).map_err(|e| err("catalog", e))?;
-        conn.execute_batch("PRAGMA page_size=4096; PRAGMA journal_mode=OFF;")
-            .map_err(|e| err("catalog", e))?;
-        conn.execute_batch(SCHEMA).map_err(|e| err("schema", e))?;
-        let files = fill(&conn, model, queries, tables)?;
-        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);").ok();
-        files
-    };
-    let mut catalog = Vec::new();
-    std::fs::File::open(file.path())
-        .and_then(|mut f| f.read_to_end(&mut catalog))
+    // The database is built in memory and serialized, so no file system is needed (the
+    // browser has none).
+    let mut conn = Connection::open_in_memory().map_err(|e| err("catalog", e))?;
+    conn.execute_batch("PRAGMA page_size=4096; PRAGMA journal_mode=OFF;")
         .map_err(|e| err("catalog", e))?;
+    conn.execute_batch(SCHEMA).map_err(|e| err("schema", e))?;
+    let files = fill(&conn, model, queries, tables)?;
+    let catalog = conn
+        .serialize(rusqlite::MAIN_DB)
+        .map_err(|e| err("catalog", e))?
+        .to_vec();
     Ok(Built { catalog, files })
 }
 

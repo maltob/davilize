@@ -101,13 +101,25 @@ Not built yet: multi-user features, a Python bridge, and more connectors (MySQL,
 
 The same app runs in a browser, with no install and no upload: queries run in [DuckDB-Wasm](https://github.com/duckdb/duckdb-wasm), and the rest of the engine is the Rust `dv-wasm` crate compiled to WebAssembly. It shares the SQL compiler, joins, calculated-field checks, chart specs and HTML/XLSX writers with the CLI and the desktop app, so a report gives the same result everywhere.
 
-What works in the browser: opening and saving `.dvz` reports (picked files, saved as downloads), CSV, Parquet, JSON and Arrow data, joins, calculated fields, parameters, charts, dashboards with shared filters, export to HTML, Excel, CSV, PNG and PDF (through the print dialog), and importing and exporting Tableau workbooks (`.twb`, `.twbx`) and Power BI templates and project folders (`.pbit`, project folder; `.pbix` import reads the report pages only).
+What works in the browser: opening and saving `.dvz` reports (picked files, saved as downloads), CSV, Parquet, JSON and Arrow data, SQLite database sources, joins, calculated fields, parameters, charts, dashboards with shared filters, export to HTML, Excel, CSV, PNG and PDF (through the print dialog), and importing and exporting Tableau workbooks (`.twb`, `.twbx`) and Power BI files (`.pbit`, project folder, and `.pbix` export with data; `.pbix` import reads the report pages only).
 
-What needs the desktop app or the CLI: database sources (SQLite, PostgreSQL), publishing, scheduling, and `.pbix` files with data (their SQLite and XPress9 code is C, which the WebAssembly build leaves out). The browser reads data files you choose, so a report's data files must be chosen together with the report.
+What needs the desktop app or the CLI: PostgreSQL sources (a browser cannot open a database connection), publishing, scheduling, and reading the data model of a `.pbix` (the `ripbi-core` reader works on file paths).
+
+Other differences in the browser:
+
+- **Network on first use.** DuckDB-Wasm loads from a CDN (a pinned version), so the page does not work offline. The chart library is part of the page. The WebAssembly module itself is about 7 MB.
+- **Kept in this browser.** Files you pick and reports you save are stored in the browser's private storage (OPFS), so they are still there after a reload; the start page lists them and has a button that clears everything. DuckDB reads stored data files in slices rather than loading them into memory. Where the browser refuses storage (a private window, a full disk), files last for the session only.
+- **Open a report with its data.** A report names its data files, so choose them together with the `.dvz` the first time. After that the browser has them.
+- **SQLite sources.** A report's database source names a connection, and the browser has no environment variables, so choose a file named after the connection (`sample_db.sqlite`, `.sqlite3` or `.db`) together with the report. The whole database is copied into memory while the report is open, and column types follow the declared types (a value that does not fit turns its column into text). DuckDB's own SQLite extension loads in the browser but cannot open files the page provides, so a small WebAssembly SQLite reader is used instead.
+- **Downloads, not folders.** Saving a report and every export is a download, and an export of several files (CSV per chart, PNG, a Power BI project folder) arrives as one zip.
+- **PNG and PDF differ.** PNG is drawn from the chart in the page, so it looks slightly different from the desktop app's renderer. PDF opens the print dialog; choose Save as PDF.
+- **A newer DuckDB than the desktop app.** The browser runs DuckDB-Wasm 1.32 (DuckDB 1.4), while the desktop app and CLI use the latest `duckdb` Rust crate, which is DuckDB 1.2. Reports behave the same, but a few SQL details can differ between them.
+- **Tested in one browser.** It has been run in a Chromium-based browser only.
 
 ```powershell
 rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli   # same version as wasm-bindgen in Cargo.lock
+# scripts/build-site.sh sets the C compiler flags the .pbix writer needs (see scripts/wasm-env.sh)
 cargo build --release -p dv-cli
 bash scripts/build-site.sh       # writes ./site
 ```

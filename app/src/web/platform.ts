@@ -4,7 +4,7 @@
 export const isWeb: boolean = typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window);
 
 /** Export formats the web page can write. The rest need the desktop app or the CLI. */
-export const WEB_EXPORT_FORMATS = ["html", "xlsx", "csv", "png", "pdf", "twb", "twbx", "pbit", "pbip"];
+export const WEB_EXPORT_FORMATS = ["html", "xlsx", "csv", "png", "pdf", "twb", "twbx", "pbit", "pbip", "pbix"];
 
 /** The URL of a file served next to the page (the web build uses relative asset paths). */
 export function assetUrl(path: string): string {

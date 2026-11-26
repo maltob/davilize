@@ -855,6 +855,7 @@ export default function App() {
                       onOpenData={addFiles}
                       onOpenReport={openReport}
                       onOpenSample={openSample}
+                      onOpenStored={openReportAt}
                       busy={busy !== null}
                     />
                   )}

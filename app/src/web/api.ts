@@ -2,7 +2,7 @@
 
 import type { Dataset, Filter, ImportedReport, Parameter, Report, Visual } from "../types";
 import { engine, guard } from "./engine";
-import { download } from "./files";
+import { download, putFile } from "./files";
 import { unwrap, wasm } from "./wasm";
 
 export const webApi = {
@@ -15,6 +15,8 @@ export const webApi = {
       const w = await wasm();
       const text = unwrap<{ text: string }>(w.save_report(JSON.stringify(report))).text;
       download(path, text, "application/json");
+      // Keep a copy in this browser too, so it can be reopened without choosing it again.
+      putFile(path, new TextEncoder().encode(text));
       return JSON.parse(text) as Report;
     }),
   previewDataset: (dataset: string, limit: number) => guard(() => engine.previewDataset(dataset, limit)),
