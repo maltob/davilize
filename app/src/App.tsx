@@ -50,6 +50,7 @@ import {
   type Slot,
 } from "./model";
 import { isWeb, WEB_EXPORT_FORMATS } from "./web/platform";
+import { onEngineStarting } from "./web/status";
 import type { ApiError, CalculatedField, ColumnView, Dashboard, Dataset, Parameter, Report, Visual } from "./types";
 
 const ALL_EXPORT_FORMATS = [
@@ -161,6 +162,8 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const nextToastId = useRef(1);
   const [busy, setBusy] = useState<string | null>(null);
+  const [engineStarting, setEngineStartingState] = useState(false);
+  useEffect(() => onEngineStarting(setEngineStartingState), []);
   const [exportFormat, setExportFormat] = useState("html");
   // Runtime values for the report's parameters. They are not saved in the .dvz.
   const [paramValues, setParamValues] = useState<Record<string, string>>({});
@@ -653,6 +656,7 @@ export default function App() {
           <span role="status" className="flex items-center gap-2 text-xs text-muted">
             <span className="spinner" aria-hidden="true" />
             {busy}...
+            {engineStarting && " Loading the data engine (about 34 MB on the first visit only)"}
           </span>
         )}
         {report.parameters.length > 0 && (

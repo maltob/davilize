@@ -5,6 +5,8 @@
 import engine from "@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url";
 import worker from "@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url";
 
+import { setEngineStarting } from "./status";
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export interface Duck {
   db: any;
@@ -14,14 +16,16 @@ export interface Duck {
 }
 
 let loading: Promise<Duck> | undefined;
-
 export function duck(): Promise<Duck> {
-  loading ??= (async () => {
-    const [duckdb, arrow]: any[] = await Promise.all([import("@duckdb/duckdb-wasm"), import("apache-arrow")]);
-    const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING), new Worker(worker));
-    await db.instantiate(engine);
-    const conn = await db.connect();
-    return { db, conn, arrow, duckdb };
-  })();
+  if (!loading) {
+    setEngineStarting(true);
+    loading = (async () => {
+      const [duckdb, arrow]: any[] = await Promise.all([import("@duckdb/duckdb-wasm"), import("apache-arrow")]);
+      const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING), new Worker(worker));
+      await db.instantiate(engine);
+      const conn = await db.connect();
+      return { db, conn, arrow, duckdb };
+    })().finally(() => setEngineStarting(false));
+  }
   return loading;
 }
