@@ -39,6 +39,15 @@ fn title_value(title: &str, notes: &[String]) -> Value {
 fn base(title: Value, data: Value) -> Map<String, Value> {
     let mut spec = Map::new();
     spec.insert("$schema".into(), json!(SCHEMA));
+    // Vega-Lite turns `description` into the chart's accessible name (aria-label).
+    let description = title
+        .get("text")
+        .unwrap_or(&title)
+        .as_str()
+        .map(str::to_owned);
+    if let Some(description) = description {
+        spec.insert("description".into(), json!(description));
+    }
     spec.insert("title".into(), title);
     spec.insert("data".into(), json!({ "values": data }));
     spec.insert("width".into(), json!(WIDTH));

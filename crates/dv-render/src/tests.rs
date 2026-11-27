@@ -68,6 +68,7 @@ fn bar_spec_matches_golden() {
     let expected = json!({
         "$schema": SCHEMA,
         "title": "Revenue by region",
+        "description": "Revenue by region",
         "data": {"values": [
             {"region": "North", "total_revenue": 150.0},
             {"region": "South", "total_revenue": 60.0}

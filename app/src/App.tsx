@@ -100,7 +100,7 @@ function clampPanel(width: number): number {
 function loadLayout(): LayoutPrefs {
   try {
     const raw = window.localStorage.getItem(LAYOUT_KEY);
-    if (!raw) return DEFAULT_LAYOUT;
+    if (!raw) return firstLayout();
     const saved = JSON.parse(raw) as Partial<LayoutPrefs> | null;
     return {
       panelWidth:
@@ -108,8 +108,13 @@ function loadLayout(): LayoutPrefs {
       panelCollapsed: saved?.panelCollapsed === true,
     };
   } catch {
-    return DEFAULT_LAYOUT;
+    return firstLayout();
   }
+}
+
+/** Layout before the user has chosen one: on a narrow window the data panel starts hidden, so the chart gets the room. */
+function firstLayout(): LayoutPrefs {
+  return { ...DEFAULT_LAYOUT, panelCollapsed: window.innerWidth < 900 };
 }
 
 function saveLayout(prefs: LayoutPrefs) {
@@ -701,7 +706,7 @@ export default function App() {
             disabled={busy !== null}
             title="Import a Tableau (.twb, .twbx) or Power BI (.pbit, .pbix) file"
           >
-            Import...
+            Import Tableau / Power BI...
           </button>
           {isWeb && (
             <button
@@ -711,7 +716,7 @@ export default function App() {
               disabled={busy !== null}
               title="Import a Power BI Project folder"
             >
-              Import project...
+              Import Power BI folder...
             </button>
           )}
           <button type="button" className={button} onClick={() => saveReport(false)} disabled={busy !== null}>

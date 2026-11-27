@@ -119,7 +119,7 @@ test.describe("export", () => {
 test("a Power BI template imports into a report", async ({ page }) => {
   await choose(page, "Open data files", [example("sample.csv"), example("regions.csv")], false);
   await expect(page.getByText("regions").first()).toBeVisible();
-  await choose(page, "Import...", [example("sample_joined.pbit")]);
+  await choose(page, "Import Tableau / Power BI...", [example("sample_joined.pbit")]);
   await expect(page.getByText(/Imported to/)).toBeVisible();
   await expect(firstChart(page)).toBeVisible();
 });
