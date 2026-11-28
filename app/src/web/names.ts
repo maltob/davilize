@@ -34,6 +34,21 @@ export function family(dataType: string): Family {
   return "other";
 }
 
+const WHOLE_NUMBER_TYPES = NUMBER_TYPES.slice(0, NUMBER_TYPES.indexOf("FLOAT"));
+
+/**
+ * A whole-number column whose name says it identifies rows (`id`, `order_id`, `customerId`,
+ * `product_key`). Summing one is meaningless, so it starts as a dimension. Keep in step with
+ * `is_identifier` in `app/src-tauri/src/service.rs`.
+ */
+export function isIdentifier(name: string, dataType: string): boolean {
+  const base = dataType.split("(")[0]!.trim().toUpperCase();
+  if (!WHOLE_NUMBER_TYPES.includes(base)) return false;
+  const lower = name.toLowerCase();
+  if (lower === "id" || lower === "key" || lower.endsWith("_id") || lower.endsWith("_key")) return true;
+  return /[a-z]Id$/.test(name);
+}
+
 /** Turns a file name stem into a valid relation name (letters, digits, `_`). */
 export function relationBase(stem: string): string {
   const name = stem.replace(/[^A-Za-z0-9_]/g, "_");

@@ -20,7 +20,7 @@ import type {
   Visual,
 } from "../types";
 import { duck } from "./duck";
-import { family, outputStem, relationBase, uniqueRelation } from "./names";
+import { family, isIdentifier, outputStem, relationBase, uniqueRelation } from "./names";
 import { assetUrl } from "./platform";
 import {
   baseName,
@@ -127,7 +127,7 @@ class WebEngine {
         name: c.name,
         data_type: c.type,
         family: fam,
-        role: fam === "number" ? ("measure" as const) : ("dimension" as const),
+        role: fam === "number" && !isIdentifier(c.name, c.type) ? ("measure" as const) : ("dimension" as const),
         calculated: calc.has(c.name.toLowerCase()),
       };
     });

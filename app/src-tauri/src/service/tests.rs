@@ -92,6 +92,31 @@ fn column_families_and_default_roles() {
 }
 
 #[test]
+fn identifier_columns_start_as_dimensions() {
+    for name in [
+        "id",
+        "Id",
+        "order_id",
+        "ORDER_ID",
+        "customerId",
+        "product_key",
+    ] {
+        assert!(is_identifier(name, "BIGINT"), "{name}");
+    }
+    // Not identifiers: other names, non-whole numbers, and words that merely end in "id".
+    for (name, ty) in [
+        ("units", "BIGINT"),
+        ("paid", "INTEGER"),
+        ("valid", "INTEGER"),
+        ("order_id", "DOUBLE"),
+        ("order_id", "VARCHAR"),
+        ("grid", "INTEGER"),
+    ] {
+        assert!(!is_identifier(name, ty), "{name} {ty}");
+    }
+}
+
+#[test]
 fn relation_names_are_sanitized_and_unique() {
     assert_eq!(relation_base("my sales-2026.v1"), "my_sales_2026_v1");
     assert_eq!(relation_base("---"), "data");

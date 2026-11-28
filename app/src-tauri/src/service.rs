@@ -166,6 +166,47 @@ pub fn family(data_type: &str) -> &'static str {
     }
 }
 
+/// A whole-number column whose name says it identifies rows (`id`, `order_id`, `customerId`,
+/// `product_key`). Summing one is meaningless, so it starts as a dimension. Keep in step with
+/// `isIdentifier` in `app/src/web/names.ts`.
+pub fn is_identifier(name: &str, data_type: &str) -> bool {
+    let base = data_type
+        .split('(')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_uppercase();
+    let whole = matches!(
+        base.as_str(),
+        "TINYINT"
+            | "SMALLINT"
+            | "INTEGER"
+            | "INT"
+            | "INT4"
+            | "BIGINT"
+            | "INT8"
+            | "HUGEINT"
+            | "UTINYINT"
+            | "USMALLINT"
+            | "UINTEGER"
+            | "UBIGINT"
+            | "UHUGEINT"
+    );
+    if !whole {
+        return false;
+    }
+    let lower = name.to_ascii_lowercase();
+    if lower == "id" || lower == "key" || lower.ends_with("_id") || lower.ends_with("_key") {
+        return true;
+    }
+    // camelCase: "customerId" (an upper-case I after a lower-case letter, then "d" at the end).
+    let chars: Vec<char> = name.chars().collect();
+    chars.len() > 2
+        && chars[chars.len() - 2] == 'I'
+        && chars[chars.len() - 1] == 'd'
+        && chars[chars.len() - 3].is_lowercase()
+}
+
 /// Builds field-list entries from DuckDB's `DESCRIBE` output.
 pub fn column_views(columns: Vec<ColumnInfo>) -> Vec<ColumnView> {
     columns
@@ -173,7 +214,7 @@ pub fn column_views(columns: Vec<ColumnInfo>) -> Vec<ColumnView> {
         .map(|c| {
             let family = family(&c.data_type);
             ColumnView {
-                role: if family == "number" {
+                role: if family == "number" && !is_identifier(&c.name, &c.data_type) {
                     "measure"
                 } else {
                     "dimension"

@@ -1,7 +1,23 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { family, outputStem, relationBase, uniqueRelation } from "./names.ts";
+import { family, isIdentifier, outputStem, relationBase, uniqueRelation } from "./names.ts";
+
+test("whole-number id columns start as dimensions", () => {
+  for (const name of ["id", "Id", "order_id", "ORDER_ID", "customerId", "product_key"]) {
+    assert.equal(isIdentifier(name, "BIGINT"), true, name);
+  }
+  for (const [name, type] of [
+    ["units", "BIGINT"],
+    ["paid", "INTEGER"],
+    ["valid", "INTEGER"],
+    ["grid", "INTEGER"],
+    ["order_id", "DOUBLE"],
+    ["order_id", "VARCHAR"],
+  ] as const) {
+    assert.equal(isIdentifier(name, type), false, `${name} ${type}`);
+  }
+});
 
 test("family groups DuckDB types", () => {
   assert.equal(family("BIGINT"), "number");
