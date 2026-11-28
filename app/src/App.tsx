@@ -730,30 +730,39 @@ export default function App() {
             Save as
           </button>
           <span className="mx-1 h-6 w-px bg-border" aria-hidden="true" />
-          <label className="sr-only" htmlFor="export-format">
-            Export format
-          </label>
-          <select
-            id="export-format"
-            value={exportFormat}
-            onChange={(e) => setExportFormat(e.target.value)}
-            className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm"
-          >
-            {EXPORT_FORMATS.map((f) => (
-              <option key={f.value} value={f.value}>
-                {f.label}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            className={primary}
-            onClick={exportReport}
-            disabled={busy !== null || report.visuals.length === 0 || paramsBlocked}
-            title={paramsBlocked ? "Fix the parameter values to export" : undefined}
-          >
-            Export...
-          </button>
+          {/* One group, so the format and its button never wrap onto separate lines. */}
+          <div className="flex items-center gap-2" role="group" aria-label="Export">
+            <label className="whitespace-nowrap text-sm text-muted" htmlFor="export-format">
+              Export as
+            </label>
+            <select
+              id="export-format"
+              value={exportFormat}
+              onChange={(e) => setExportFormat(e.target.value)}
+              className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm"
+            >
+              {EXPORT_FORMATS.map((f) => (
+                <option key={f.value} value={f.value}>
+                  {f.label}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className={primary}
+              onClick={exportReport}
+              disabled={busy !== null || report.visuals.length === 0 || paramsBlocked}
+              title={
+                paramsBlocked
+                  ? "Fix the parameter values to export"
+                  : report.visuals.length === 0
+                    ? "Build a chart first, then export"
+                    : undefined
+              }
+            >
+              Export...
+            </button>
+          </div>
         </div>
       </header>
 
