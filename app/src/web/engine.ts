@@ -54,6 +54,8 @@ const FILE_FORMATS: Record<string, "csv" | "parquet" | "json" | "arrow"> = {
   ipc: "arrow",
 };
 
+/** How many rows of a text column are looked at (the same number as dv_sql::infer::SAMPLE_ROWS). */
+const INFER_SAMPLE_ROWS = 100;
 const READERS = { csv: "read_csv_auto", parquet: "read_parquet", json: "read_json_auto" } as const;
 
 function toApiError(error: unknown) {
@@ -162,8 +164,31 @@ class WebEngine {
       await conn.query(
         `CREATE OR REPLACE VIEW ${view} AS SELECT * FROM ${READERS[source.format]}(${literal(name)})`,
       );
+      if (source.format === "csv") await this.refineCsvTypes(source.name, name);
     }
     if (!this.views.includes(source.name)) this.views.push(source.name);
+  }
+
+  /**
+   * Reads text columns of a CSV as numbers or dates when their first rows say so ("$1,234.50",
+   * "12%", "n/a" among numbers, "Jan 5, 2025"). DuckDB has already typed everything else. The
+   * rules live in dv-sql (the desktop engine uses the same ones).
+   */
+  private async refineCsvTypes(sourceName: string, file: string): Promise<void> {
+    const view = quote(sourceName);
+    const text = (await this.describe(`SELECT * FROM ${view}`)).filter((c) => c.type === "VARCHAR").map((c) => c.name);
+    if (text.length === 0) return;
+    const sample = await this.run(`SELECT ${text.map(quote).join(", ")} FROM ${view} LIMIT ${INFER_SAMPLE_ROWS}`);
+    const rows = sample.toArray();
+    const samples = text.map((column) => ({
+      column,
+      values: rows.map((row: any) => (row[column] === null ? null : String(row[column]))),
+    }));
+    const w = await wasm();
+    const { replace } = unwrap<{ replace: string | null }>(w.infer_types(JSON.stringify(samples)));
+    if (replace) {
+      await this.run(`CREATE OR REPLACE VIEW ${view} AS SELECT ${replace} FROM read_csv_auto(${literal(file)})`);
+    }
   }
 
   /**

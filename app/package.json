@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "test:e2e": "playwright test",
     "test:layout": "node --experimental-strip-types --test src/layout.test.ts",
-    "test": "node --experimental-strip-types --test src/layout.test.ts src/chartText.test.ts src/history.test.ts src/joins.test.ts src/web/names.test.ts",
+    "test": "node --experimental-strip-types --test src/layout.test.ts src/chartText.test.ts src/history.test.ts src/joins.test.ts src/web/names.test.ts src/model.test.ts",
     "tauri": "tauri"
   },
   "dependencies": {

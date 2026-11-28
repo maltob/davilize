@@ -122,6 +122,9 @@ impl Engine {
                     sql::quote_literal(&full.to_string_lossy()),
                 );
                 self.conn.execute_batch(&sql)?;
+                if *format == FileFormat::Csv {
+                    self.refine_csv_types(&source.name, reader, &full)?;
+                }
                 Ok(())
             }
             SourceKind::Database { kind, connection } => {
@@ -129,6 +132,58 @@ impl Engine {
                 self.register_database(&source.name, *kind, &target)
             }
         }
+    }
+
+    /// Reads text columns of a CSV source as numbers or dates when their first rows say so
+    /// (see [`dv_sql::infer`]): "$1,234.50", "12%", "n/a" among numbers, "Jan 5, 2025".
+    /// DuckDB's own detection has already typed everything else.
+    fn refine_csv_types(&self, view: &str, reader: &str, path: &Path) -> Result<(), EngineError> {
+        let text: Vec<String> = self
+            .schema(view)?
+            .into_iter()
+            .filter(|c| c.data_type == "VARCHAR")
+            .map(|c| c.name)
+            .collect();
+        if text.is_empty() {
+            return Ok(());
+        }
+        let select = text
+            .iter()
+            .map(|c| sql::quote_ident(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let batches = self.query(&format!(
+            "SELECT {select} FROM {} LIMIT {}",
+            sql::quote_ident(view),
+            dv_sql::infer::SAMPLE_ROWS
+        ))?;
+        let mut samples: Vec<(String, Vec<Option<String>>)> =
+            text.iter().map(|c| (c.clone(), Vec::new())).collect();
+        for batch in &batches {
+            for (index, (_, values)) in samples.iter_mut().enumerate() {
+                let array = batch.column(index);
+                for row in 0..batch.num_rows() {
+                    values.push(if array.is_null(row) {
+                        None
+                    } else {
+                        Some(
+                            array_value_to_string(array, row)
+                                .map_err(|e| EngineError::Unsupported(e.to_string()))?,
+                        )
+                    });
+                }
+            }
+        }
+        let conversions = dv_sql::infer::refine_columns(&samples);
+        let Some(replace) = dv_sql::infer::replace_clause(&conversions) else {
+            return Ok(());
+        };
+        self.conn.execute_batch(&format!(
+            "CREATE OR REPLACE VIEW {} AS SELECT {replace} FROM {reader}({})",
+            sql::quote_ident(view),
+            sql::quote_literal(&path.to_string_lossy()),
+        ))?;
+        Ok(())
     }
 
     /// Attaches a database read-only and exposes its tables as views in a schema

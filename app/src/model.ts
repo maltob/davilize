@@ -179,11 +179,79 @@ export function outputNames(visual: Visual): string[] {
   return [...new Set(names)];
 }
 
-/** Default pill for a field dropped on a shelf. */
-export function pillFor(column: ColumnView): Pill {
-  return column.role === "measure"
-    ? { field: column.name, kind: "measure", agg: "sum" }
-    : { field: column.name, kind: "dimension", agg: "sum" };
+/**
+ * The aggregates that make sense for a field of this type. Summing or averaging text, dates or
+ * true/false values is an error in SQL, so those fields are offered counts (and min and max
+ * where they order: text and dates). The first entry is the default.
+ */
+export function aggregatesFor(family: Family | undefined): PillAgg[] {
+  switch (family) {
+    case "number":
+      return ["sum", "avg", "min", "max", "count", "count_distinct", "raw"];
+    case "text":
+      return ["count_distinct", "count", "min", "max", "raw"];
+    case "date":
+      return ["count", "count_distinct", "min", "max", "raw"];
+    default:
+      return ["count", "count_distinct", "raw"];
+  }
+}
+
+/**
+ * How a field is aggregated when it lands on a measure shelf: sum for a real quantity, count
+ * distinct for text and identifiers (an order_id summed means nothing), count for the rest.
+ */
+export function defaultAgg(column: ColumnView): PillAgg {
+  if (column.family === "number") return column.role === "measure" ? "sum" : "count_distinct";
+  if (column.family === "text") return "count_distinct";
+  return "count";
+}
+
+/** What a shelf holds for a chart type: a grouping field, a number to aggregate, or either. */
+export function expectedKind(chart: Visual["chart"], slot: Slot): Pill["kind"] | null {
+  switch (chart) {
+    case "bar":
+    case "line":
+      return slot === "x" || slot === "color" ? "dimension" : "measure";
+    case "scatter":
+      return slot === "color" ? "dimension" : "measure";
+    case "heatmap":
+      return slot === "color" ? "measure" : slot === "size" ? "measure" : "dimension";
+    case "table":
+      return null;
+  }
+}
+
+/**
+ * Default pill for a field dropped on a shelf. The shelf decides the kind (a text field on a
+ * measure shelf becomes a count, a number on a grouping shelf groups by its values); with no
+ * shelf in mind, numbers are measures and everything else groups.
+ */
+export function pillFor(column: ColumnView, slot?: Slot, chart?: Visual["chart"]): Pill {
+  const wanted = slot && chart ? expectedKind(chart, slot) : null;
+  const kind = wanted ?? (column.role === "measure" ? "measure" : "dimension");
+  return kind === "measure"
+    ? { field: column.name, kind, agg: defaultAgg(column) }
+    : { field: column.name, kind, agg: "sum" };
+}
+
+/**
+ * The shelf a field should go to when it is dropped on the chart itself, not on a shelf: the
+ * first empty shelf that takes that kind of field (numbers to measure shelves, everything else to
+ * grouping shelves), then any empty shelf, then the main shelf of that kind, which it replaces.
+ */
+export function smartSlot(chart: Visual["chart"], column: ColumnView, slots: Slots): Slot {
+  const wantsMeasure = column.family === "number" && column.role === "measure";
+  const want: Pill["kind"] = wantsMeasure ? "measure" : "dimension";
+  const order: Slot[] = wantsMeasure ? ["y", "x", "size", "color"] : ["x", "y", "color", "size"];
+  const usable = order.filter((slot) => slot !== "size" || chart === "scatter");
+  const kindOf = (slot: Slot) => expectedKind(chart, slot) ?? want;
+  return (
+    usable.find((slot) => !slots[slot] && kindOf(slot) === want) ??
+    usable.find((slot) => !slots[slot]) ??
+    usable.find((slot) => kindOf(slot) === want) ??
+    "x"
+  );
 }
 
 export function autoTitle(visual: Visual): string {

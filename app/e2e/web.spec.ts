@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -71,6 +71,76 @@ test("charts and dashboards are tabs along the bottom", async ({ page }) => {
   await expect(firstChart(page)).toBeVisible();
   await page.getByRole("button", { name: "New chart" }).click();
   await expect(page.getByRole("tab", { name: "New chart" })).toHaveAttribute("aria-selected", "true");
+});
+
+test.describe("building a chart by dragging fields", () => {
+  // The draggable label carries the field name and type as its title, e.g. "region (VARCHAR)".
+  const field = (page: Page, name: string) => page.locator(`#data-panel [draggable=true][title^="${name} ("]`);
+  const shelf = (page: Page, name: string) => page.getByRole("region", { name: `${name} shelf` });
+
+  test.beforeEach(async ({ page }) => {
+    await choose(page, "Open data files", [example("sample.csv")]);
+    await expect(page.getByLabel("Add region to a shelf")).toBeVisible();
+  });
+
+  test("fields drop onto the shelves, and a number is summed", async ({ page }) => {
+    await field(page, "region").dragTo(shelf(page, "Columns"));
+    await field(page, "revenue").dragTo(shelf(page, "Rows"));
+    await expect(shelf(page, "Columns")).toContainText("region");
+    await expect(page.getByLabel("Aggregation for revenue on Rows")).toHaveValue("sum");
+    await expect(firstChart(page)).toContainText("West");
+  });
+
+  test("a text field on a measure shelf is counted, not summed", async ({ page }) => {
+    await field(page, "region").dragTo(shelf(page, "Columns"));
+    await field(page, "customer").dragTo(shelf(page, "Rows"));
+    const aggregate = page.getByLabel("Aggregation for customer on Rows");
+    await expect(aggregate).toHaveValue("count_distinct");
+    await expect(aggregate.locator("option", { hasText: "Sum" })).toHaveCount(0);
+    await expect(aggregate.locator("option", { hasText: "Average" })).toHaveCount(0);
+    await expect(firstChart(page)).toContainText("West");
+  });
+
+  test("dropping a field on the chart puts it on a suitable shelf", async ({ page }) => {
+    await field(page, "units").dragTo(page.getByRole("region", { name: "Chart" }));
+    await expect(shelf(page, "Rows")).toContainText("units");
+    await field(page, "product").dragTo(page.getByRole("region", { name: "Chart" }));
+    await expect(shelf(page, "Columns")).toContainText("product");
+  });
+
+  test("a field dragged from one shelf to another moves, and the other swaps back", async ({ page }) => {
+    await field(page, "region").dragTo(shelf(page, "Columns"));
+    await field(page, "units").dragTo(shelf(page, "Rows"));
+    await shelf(page, "Columns").getByTitle("Drag to another shelf").dragTo(shelf(page, "Rows"));
+    await expect(shelf(page, "Rows")).toContainText("region");
+    await expect(shelf(page, "Columns")).toContainText("units");
+  });
+});
+
+test("text columns that are really numbers or dates are read as such", async ({ page }, testInfo) => {
+  // Prices with a currency sign and separators, a percent column, and dates with month names.
+  const rows = ["id,zip,price,pct,joined,qty,note"];
+  for (let i = 1; i <= 30; i++) {
+    const price = `"$${i},${String(i).padStart(3, "0")}.50"`;
+    const joined = `Jan ${(i % 27) + 1} 2025`;
+    const qty = i % 5 === 0 ? "n/a" : i;
+    rows.push([i, String(2000 + i).padStart(5, "0"), price, `${i % 100}%`, joined, qty, "ok"].join(","));
+  }
+  const file = testInfo.outputPath("awkward.csv");
+  writeFileSync(file, rows.join("\n") + "\n");
+  await choose(page, "Open data files", [file]);
+  await expect(page.getByLabel("Add price to a shelf")).toBeVisible();
+
+  await page.getByRole("button", { name: "Show data" }).click();
+  const type = (name: string) => page.locator(`#data-panel [draggable=true][title^="${name} ("]`);
+  await expect(type("price")).toHaveAttribute("title", "price (DOUBLE)");
+  await expect(type("pct")).toHaveAttribute("title", "pct (BIGINT)");
+  await expect(type("joined")).toHaveAttribute("title", "joined (DATE)");
+  await expect(type("qty")).toHaveAttribute("title", "qty (BIGINT)");
+  // Zip codes keep their leading zeros: they stay text.
+  await expect(type("zip")).toHaveAttribute("title", "zip (VARCHAR)");
+  // A converted price is a measure, so it can be summed.
+  await expect(page.getByRole("region", { name: "Measures" })).toContainText("price");
 });
 
 test("a report with a join opens and aggregates across it", async ({ page }) => {

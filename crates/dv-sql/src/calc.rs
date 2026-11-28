@@ -191,20 +191,20 @@ pub fn friendly_reason(raw: &str) -> String {
         text = text[..at].trim_end();
     }
 
-    if let Some(rest) = text.strip_prefix("Referenced column \"") {
-        if let Some((name, tail)) = rest.split_once('"') {
-            let suggestion = tail
-                .split("Candidate bindings: ")
-                .nth(1)
-                .and_then(|list| list.split('"').nth(1))
-                .map(|candidate| candidate.rsplit('.').next().unwrap_or(candidate));
-            return match suggestion {
-                Some(candidate) => {
-                    format!("unknown field \"{name}\" (did you mean \"{candidate}\"?)")
-                }
-                None => format!("unknown field \"{name}\""),
-            };
-        }
+    if let Some(rest) = text.strip_prefix("Referenced column \"")
+        && let Some((name, tail)) = rest.split_once('"')
+    {
+        let suggestion = tail
+            .split("Candidate bindings: ")
+            .nth(1)
+            .and_then(|list| list.split('"').nth(1))
+            .map(|candidate| candidate.rsplit('.').next().unwrap_or(candidate));
+        return match suggestion {
+            Some(candidate) => {
+                format!("unknown field \"{name}\" (did you mean \"{candidate}\"?)")
+            }
+            None => format!("unknown field \"{name}\""),
+        };
     }
     if text.starts_with("syntax error") {
         return "syntax error: check for a missing value, bracket or comma".to_string();

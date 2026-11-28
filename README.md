@@ -6,7 +6,7 @@ Status: early (version 0.1). It works end to end on the paths listed below, but 
 
 ## What it does
 
-- **Reads data** from CSV, Parquet, Arrow IPC and JSON files, and from SQLite and PostgreSQL databases. Queries run in an embedded DuckDB, which spills to disk, so data larger than memory is fine. Aggregation is pushed down to SQL.
+- **Reads data** from CSV, Parquet, Arrow IPC and JSON files, and from SQLite and PostgreSQL databases. Queries run in an embedded DuckDB, which spills to disk, so data larger than memory is fine. Aggregation is pushed down to SQL. Column types come from DuckDB's detection, and text columns in a CSV are also read as numbers or dates when their first 100 values say so (`$1,234.50`, `12%`, `(300)`, `n/a` among numbers, `Jan 5, 2025`); codes with leading zeros stay text. A chart never sums text: dropping a text field on a measure shelf counts it instead.
 - **Designs reports** in the app: pick fields, drop them on shelves, and get a bar, line, scatter, table or heatmap chart. Add filters (on rows or on aggregates), calculated fields and typed parameters.
 - **Joins datasets** on matching columns, as inner, left, right or full joins, in the app or in the report file. A joined dataset can join others, and fields and charts use it like any other dataset.
 - **Lays out dashboards** on a grid, with drag and keyboard editing and filters shared across visuals.

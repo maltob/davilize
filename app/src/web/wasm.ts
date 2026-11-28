@@ -13,6 +13,7 @@ interface DvWasm {
   calc_parse_query(field: string, expression: string): string;
   calc_verify(field: string, serialized: string): string;
   calc_friendly_reason(raw: string): string;
+  infer_types(samples: string): string;
   compile_visual(
     visualJson: string,
     parametersJson: string,

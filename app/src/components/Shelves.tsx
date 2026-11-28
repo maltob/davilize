@@ -3,6 +3,8 @@ import type { ChartType, ColumnView, Parameter, Visual } from "../types";
 import {
   AGGREGATES,
   CHART_TYPES,
+  aggregatesFor,
+  defaultAgg,
   SLOTS,
   limitDraft,
   limitFromDraft,
@@ -82,7 +84,7 @@ function readDrop(event: DragEvent): ColumnView | null {
 /** Drop-target behaviour shared by the slots and the filter shelf. Invalid drops are refused. */
 function dropProps(
   check: DropCheck,
-  onDrop: (column: ColumnView) => void,
+  onDrop: (column: ColumnView, from: Slot | null) => void,
   setDrag: (update: SetStateAction<DropCheck | null>) => void,
 ) {
   return {
@@ -102,7 +104,8 @@ function dropProps(
       setDrag(null);
       if (!check.valid) return;
       const column = readDrop(event);
-      if (column) onDrop(column);
+      const from = event.dataTransfer.getData(SLOT_MIME) as Slot | "";
+      if (column) onDrop(column, from || null);
     },
   };
 }
@@ -112,15 +115,20 @@ function dropClass(drag: DropCheck | null): string {
   return drag.valid ? "border-accent bg-accent/10" : "border-danger bg-danger-bg";
 }
 
+/** Set when a field is dragged out of a shelf, so dropping it on another shelf moves it. */
+const SLOT_MIME = "application/x-davilize-slot";
+
 interface ShelfProps {
   visual: Visual;
   slots: Slots;
+  columns: ColumnView[];
+  onSlotMove: (from: Slot, to: Slot) => void;
   onSlot: (slot: Slot, pill: Pill | null) => void;
   onFieldDrop: (column: ColumnView, target: FieldTarget) => void;
 }
 
 /** The shelves for the given slots, in the order the slots are defined. */
-function SlotShelves({ keys, visual, slots, onSlot, onFieldDrop }: ShelfProps & { keys: Slot[] }) {
+function SlotShelves({ keys, visual, slots, columns, onSlot, onSlotMove, onFieldDrop }: ShelfProps & { keys: Slot[] }) {
   const emptyHint = emptyChartHint(visual.chart, slots);
   return (
     <>
@@ -131,9 +139,11 @@ function SlotShelves({ keys, visual, slots, onSlot, onFieldDrop }: ShelfProps & 
           label={slot.label}
           hint={slot.hint}
           pill={slots[slot.key]}
+          column={columns.find((c) => c.name === slots[slot.key]?.field)}
           check={slotCheck(visual.chart, slot.key, slot.label)}
           describedBy={emptyHint ? "shelves-empty-hint" : undefined}
-          onDrop={(column) => onFieldDrop(column, slot.key)}
+          slotKey={slot.key}
+          onDrop={(column, from) => (from ? onSlotMove(from, slot.key) : onFieldDrop(column, slot.key))}
           onChange={(pill) => onSlot(slot.key, pill)}
         />
       ))}
@@ -190,8 +200,10 @@ export function FiltersCard({
 export function MarksCard({
   visual,
   slots,
+  columns,
   parameters,
   onSlot,
+  onSlotMove,
   onFieldDrop,
   onChange,
 }: ShelfProps & { parameters: Parameter[]; onChange: (patch: Partial<Visual>) => void }) {
@@ -234,7 +246,15 @@ export function MarksCard({
       </fieldset>
 
       <div className="flex flex-col gap-1.5">
-        <SlotShelves keys={["color", "size"]} visual={visual} slots={slots} onSlot={onSlot} onFieldDrop={onFieldDrop} />
+        <SlotShelves
+          keys={["color", "size"]}
+          visual={visual}
+          slots={slots}
+          columns={columns}
+          onSlot={onSlot}
+          onSlotMove={onSlotMove}
+          onFieldDrop={onFieldDrop}
+        />
       </div>
 
       <div className="grid grid-cols-2 gap-2">
@@ -285,6 +305,8 @@ function ShelfSlot({
   label,
   hint,
   pill,
+  column,
+  slotKey,
   check,
   describedBy,
   onDrop,
@@ -294,9 +316,11 @@ function ShelfSlot({
   label: string;
   hint: string;
   pill: Pill | null;
+  column?: ColumnView;
+  slotKey: Slot;
   check: DropCheck;
   describedBy?: string;
-  onDrop: (column: ColumnView) => void;
+  onDrop: (column: ColumnView, from: Slot | null) => void;
   onChange: (pill: Pill | null) => void;
 }) {
   const [drag, setDrag] = useState<DropCheck | null>(null);
@@ -315,7 +339,7 @@ function ShelfSlot({
       <span id={hintId} className="text-xs text-muted">
         {hint}
       </span>
-      {pill && <PillView label={label} pill={pill} onChange={onChange} />}
+      {pill && <PillView label={label} pill={pill} column={column} slotKey={slotKey} onChange={onChange} />}
       {showBody && (
         <p id={bodyId} className={`text-xs ${drag && !drag.valid ? "font-medium text-danger" : "text-muted"}`}>
           {drag ? drag.message : "Drop a field here"}
@@ -325,10 +349,39 @@ function ShelfSlot({
   );
 }
 
-function PillView({ label, pill, onChange }: { label: string; pill: Pill; onChange: (pill: Pill | null) => void }) {
+function PillView({
+  label,
+  pill,
+  column,
+  slotKey,
+  onChange,
+}: {
+  label: string;
+  pill: Pill;
+  column?: ColumnView;
+  slotKey: Slot;
+  onChange: (pill: Pill | null) => void;
+}) {
   const id = `${label.replace(/\s+/g, "-").toLowerCase()}-${pill.field}`.replace(/[^A-Za-z0-9_-]/g, "_");
+  // Only aggregates that work for the field type (no Sum of text). A saved report may already use another one; keep it listed.
+  const allowedAggs = aggregatesFor(column?.family);
+  if (!allowedAggs.includes(pill.agg)) allowedAggs.push(pill.agg);
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-md bg-surface-2 px-2 py-0.5">
+      <span
+        draggable
+        aria-hidden="true"
+        title="Drag to another shelf"
+        onDragStart={(event) => {
+          const field: ColumnView = column ?? { name: pill.field, data_type: "", family: "other", role: "dimension" };
+          event.dataTransfer.setData(FIELD_MIME, JSON.stringify(field));
+          event.dataTransfer.setData(SLOT_MIME, slotKey);
+          event.dataTransfer.effectAllowed = "copyMove";
+        }}
+        className="shrink-0 cursor-grab select-none px-0.5 text-muted"
+      >
+        ⠿
+      </span>
       <span className="min-w-0 truncate text-sm font-medium" title={pill.field}>
         {pill.field}
       </span>
@@ -341,7 +394,7 @@ function PillView({ label, pill, onChange }: { label: string; pill: Pill; onChan
         value={pill.kind}
         onChange={(event) => {
           const kind = event.target.value as Pill["kind"];
-          onChange({ field: pill.field, kind, agg: kind === "measure" ? "sum" : pill.agg });
+          onChange({ field: pill.field, kind, agg: kind === "measure" ? (column ? defaultAgg(column) : "sum") : pill.agg });
         }}
       >
         <option value="dimension">Dimension</option>
@@ -358,7 +411,7 @@ function PillView({ label, pill, onChange }: { label: string; pill: Pill; onChan
             value={pill.agg}
             onChange={(event) => onChange({ ...pill, agg: event.target.value as PillAgg })}
           >
-            {AGGREGATES.map((agg) => (
+            {AGGREGATES.filter((agg) => allowedAggs.includes(agg.value)).map((agg) => (
               <option key={agg.value} value={agg.value}>
                 {agg.label}
               </option>

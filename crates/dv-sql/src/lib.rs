@@ -10,6 +10,7 @@
 //! expression of a measure (not its alias, to stay portable).
 
 pub mod calc;
+pub mod infer;
 
 use std::collections::HashSet;
 

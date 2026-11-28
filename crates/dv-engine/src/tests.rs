@@ -497,3 +497,82 @@ fn sql_errors_surface_as_duckdb_errors() {
     let err = engine.query("SELECT * FROM does_not_exist").unwrap_err();
     assert!(matches!(err, EngineError::Duckdb(_)));
 }
+
+#[test]
+fn awkward_csv_columns_are_read_as_numbers_and_dates() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("awkward.csv");
+    let mut csv = String::from("id,zip,price,pct,joined,qty,note\n");
+    for i in 1..=30 {
+        let qty = if i % 5 == 0 {
+            "n/a".to_string()
+        } else {
+            i.to_string()
+        };
+        csv.push_str(&format!(
+            "{i},{:05},\"${},{:03}.50\",{}%,Jan {} 2025,{qty},ok\n",
+            2000 + i,
+            i,
+            i,
+            i % 100,
+            i % 27 + 1,
+        ));
+    }
+    fs::write(&path, csv).unwrap();
+
+    let engine = Engine::new().unwrap();
+    engine
+        .register_source(&csv_source("awkward", &path), Path::new(""))
+        .unwrap();
+    let types: Vec<(String, String)> = engine
+        .schema("awkward")
+        .unwrap()
+        .into_iter()
+        .map(|c| (c.name, c.data_type))
+        .collect();
+    let type_of = |name: &str| {
+        types
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, t)| t.as_str())
+            .unwrap()
+    };
+    assert_eq!(type_of("id"), "BIGINT");
+    assert_eq!(
+        type_of("zip"),
+        "VARCHAR",
+        "codes with leading zeros stay text"
+    );
+    assert_eq!(type_of("price"), "DOUBLE");
+    assert_eq!(type_of("pct"), "BIGINT");
+    assert_eq!(type_of("joined"), "DATE");
+    assert_eq!(
+        type_of("qty"),
+        "BIGINT",
+        "n/a among numbers is read as empty"
+    );
+    assert_eq!(type_of("note"), "VARCHAR");
+
+    // The values themselves are right: "$1,001.50" is 1001.5, and "Jan 2 2025" is a date.
+    assert_eq!(
+        first_count(
+            &engine,
+            r#"SELECT count(*) FROM "awkward" WHERE price = 1001.5"#
+        ),
+        1
+    );
+    assert_eq!(
+        first_count(
+            &engine,
+            r#"SELECT count(*) FROM "awkward" WHERE qty IS NULL"#
+        ),
+        6
+    );
+    assert_eq!(
+        first_count(
+            &engine,
+            r#"SELECT count(*) FROM "awkward" WHERE joined = DATE '2025-01-02'"#
+        ),
+        2
+    );
+}

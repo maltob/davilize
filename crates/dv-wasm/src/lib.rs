@@ -216,6 +216,32 @@ pub fn calc_friendly_reason(raw: &str) -> String {
     dv_sql::calc::friendly_reason(raw)
 }
 
+/// Which text columns of a CSV should be read as numbers or dates, from a sample of their first
+/// values. `samples` is a JSON array of `{ "column": "price", "values": ["$1", null, ...] }`.
+/// Returns `{ replace, converted }`: a `* REPLACE (...)` clause (or null) and what changed.
+#[wasm_bindgen]
+pub fn infer_types(samples: &str) -> String {
+    respond(|| {
+        #[derive(serde::Deserialize)]
+        struct Sample {
+            column: String,
+            values: Vec<Option<String>>,
+        }
+        let samples: Vec<Sample> = serde_json::from_str(samples).map_err(|e| e.to_string())?;
+        let pairs: Vec<(String, Vec<Option<String>>)> =
+            samples.into_iter().map(|s| (s.column, s.values)).collect();
+        let conversions = dv_sql::infer::refine_columns(&pairs);
+        let converted: Vec<Value> = conversions
+            .iter()
+            .map(|c| json!({ "column": c.column, "target": c.target.name() }))
+            .collect();
+        Ok(json!({
+            "replace": dv_sql::infer::replace_clause(&conversions),
+            "converted": converted,
+        }))
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Visuals
 // ---------------------------------------------------------------------------
@@ -711,6 +737,19 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(clash["ok"], false);
+    }
+
+    #[test]
+    fn infer_types_finds_currency_columns() {
+        let samples = r#"[{"column":"price","values":["$1,200.50","$3.00",null]},{"column":"note","values":["a","b"]}]"#;
+        let out: Value = serde_json::from_str(&infer_types(samples)).unwrap();
+        assert_eq!(out["ok"], true);
+        assert_eq!(out["converted"][0]["column"], "price");
+        assert_eq!(out["converted"][0]["target"], "number");
+        assert!(out["replace"].as_str().unwrap().starts_with("* REPLACE ("));
+        let none: Value =
+            serde_json::from_str(&infer_types(r#"[{"column":"n","values":["a","b"]}]"#)).unwrap();
+        assert!(none["replace"].is_null());
     }
 
     #[test]

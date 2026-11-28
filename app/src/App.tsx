@@ -12,7 +12,7 @@ import {
 import { ChartView, ShowTableToggle, isTableSpec } from "./components/ChartView";
 import { DashboardsPanel } from "./components/Dashboards";
 import { DataGrid } from "./components/DataGrid";
-import { DataPanel, type FieldTarget } from "./components/DataPanel";
+import { DataPanel, FIELD_MIME, type FieldTarget } from "./components/DataPanel";
 import { HelpDialog } from "./components/HelpDialog";
 import { Welcome } from "./components/Welcome";
 import { ParameterValuesBar } from "./components/Parameters";
@@ -34,7 +34,9 @@ import {
   newVisualId,
   paramText,
   parameterIssues,
+  expectedKind,
   pillFor,
+  smartSlot,
   removeDataset,
   replaceDashboard,
   replaceDataset,
@@ -183,6 +185,7 @@ export default function App() {
   const [bottomTab, setBottomTab] = useState<"preview" | "profile">("preview");
   // The data preview is closed until asked for, so a big file is not read just to open a chart.
   const [dataOpen, setDataOpen] = useState(false);
+  const [chartDrag, setChartDrag] = useState(false);
   // A dashboard that was just created opens in Edit mode.
   const [freshDashboardId, setFreshDashboardId] = useState<string | null>(null);
   // The builder's chart shows as a table instead of a chart.
@@ -262,6 +265,29 @@ export default function App() {
     updateDraft((visual) => applySlots(visual, { ...slotsFromVisual(visual), [slot]: pill }));
   }
 
+  /** A shelf's field dragged onto another shelf: it moves, and a field already there swaps back. */
+  function moveSlot(from: Slot, to: Slot) {
+    if (from === to) return;
+    updateDraft((visual) => {
+      const current = slotsFromVisual(visual);
+      const moving = current[from];
+      if (!moving) return visual;
+      // A field keeps its aggregate unless the new shelf wants the other kind (text on a measure shelf becomes a count).
+      const fit = (pill: Pill | null, slot: Slot): Pill | null => {
+        if (!pill) return null;
+        const wanted = expectedKind(visual.chart, slot);
+        const column = columns.find((c) => c.name === pill.field);
+        return wanted && wanted !== pill.kind && column ? pillFor(column, slot, visual.chart) : pill;
+      };
+      return applySlots(visual, { ...current, [to]: fit(moving, to), [from]: fit(current[to], from) });
+    });
+  }
+
+  /** A field dropped on the chart itself goes to the first shelf that suits it. */
+  function dropOnChart(column: ColumnView) {
+    if (draft) addField(column, smartSlot(draft.chart, column, slots));
+  }
+
   /** A field dropped on a shelf or picked from the Add to menu. */
   function addField(column: ColumnView, target: FieldTarget) {
     if (!draft) return;
@@ -271,7 +297,7 @@ export default function App() {
         filters: [...visual.filters, { field: column.name, op: "is_not_null", values: [] }],
       }));
     } else {
-      setSlot(target, pillFor(column));
+      setSlot(target, pillFor(column, target, draft.chart));
     }
   }
 
@@ -952,8 +978,10 @@ export default function App() {
                       <MarksCard
                         visual={draft}
                         slots={slots}
+                        columns={columns}
                         parameters={report.parameters}
                         onSlot={setSlot}
+                        onSlotMove={moveSlot}
                         onFieldDrop={addField}
                         onChange={(patch) => updateDraft((v) => ({ ...v, ...patch }))}
                       />
@@ -961,7 +989,7 @@ export default function App() {
                   </aside>
 
                   <div className="order-1 flex min-w-0 shrink-0 flex-col gap-3 p-3 min-[1000px]:order-2 min-[1000px]:min-h-0 min-[1000px]:flex-1 min-[1000px]:overflow-y-auto">
-                    <AxisShelves visual={draft} slots={slots} onSlot={setSlot} onFieldDrop={addField} />
+                    <AxisShelves visual={draft} slots={slots} columns={columns} onSlot={setSlot} onSlotMove={moveSlot} onFieldDrop={addField} />
                     <ShelvesHint visual={draft} slots={slots} />
 
                     <div className="flex flex-wrap items-end gap-2">
@@ -998,8 +1026,35 @@ export default function App() {
 
                     <section
                       aria-label="Chart"
-                      className="flex min-h-[320px] shrink-0 flex-col gap-2 rounded-md border border-border bg-surface p-3 min-[1000px]:min-h-[420px]"
+                      onDragOver={(e) => {
+                        if (!e.dataTransfer.types.includes(FIELD_MIME)) return;
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = "copy";
+                        setChartDrag(true);
+                      }}
+                      onDragLeave={(e) => {
+                        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setChartDrag(false);
+                      }}
+                      onDrop={(e) => {
+                        setChartDrag(false);
+                        const raw = e.dataTransfer.getData(FIELD_MIME);
+                        if (!raw) return;
+                        e.preventDefault();
+                        try {
+                          dropOnChart(JSON.parse(raw) as ColumnView);
+                        } catch {
+                          // Not one of our fields.
+                        }
+                      }}
+                      className={`flex min-h-[320px] shrink-0 flex-col gap-2 rounded-md border bg-surface p-3 min-[1000px]:min-h-[420px] ${
+                        chartDrag ? "border-accent ring-2 ring-accent/40" : "border-border"
+                      }`}
                     >
+                      {chartDrag && (
+                        <p role="status" className="rounded-md bg-accent/10 px-2 py-1 text-sm text-text">
+                          Drop to add the field to the chart. It goes to the first shelf that suits it.
+                        </p>
+                      )}
                       <div className="flex items-center gap-2 text-sm text-muted">
                         <span className="font-medium text-text">{draft.title || autoTitle(draft)}</span>
                         {render.result && !isTableSpec(render.result.spec) && (
