@@ -442,7 +442,13 @@ fn a_real_pbix_model_is_read_without_placeholders() {
         &ImportOptions::default(),
     )
     .unwrap();
-    assert!(imported.warnings.is_empty(), "{:?}", imported.warnings);
+    // The file records the author's absolute data paths, which exist only on their machine.
+    let other: Vec<_> = imported
+        .warnings
+        .iter()
+        .filter(|w| !w.contains("was not found at"))
+        .collect();
+    assert!(other.is_empty(), "{other:?}");
     let sales = imported
         .report
         .datasets

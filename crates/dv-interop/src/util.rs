@@ -4,6 +4,21 @@ use std::collections::HashSet;
 
 use dv_core::{Dashboard, DashboardItem, Dataset};
 
+/// True for a path that is absolute on Windows (`C:/data`, `C:\data`, `//server/share`)
+/// or on Unix (`/data`). A workbook saved on Windows holds Windows paths, and they must
+/// not be taken as relative just because this machine is not Windows.
+pub fn is_absolute_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    let drive = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'/' || bytes[2] == b'\\');
+    drive
+        || path.starts_with('/')
+        || path.starts_with("\\\\")
+        || std::path::Path::new(path).is_absolute()
+}
+
 /// Turns any text into a valid Davilize name (letters, digits, `_` and `-`).
 pub fn sanitize(text: &str) -> String {
     let mut out: String = text
@@ -117,4 +132,25 @@ pub fn dataset_chain<'a>(
     }
     chain.reverse();
     Ok((chain, current.source.as_str()))
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::is_absolute_path;
+
+    #[test]
+    fn windows_and_unix_absolute_paths_are_recognised_on_every_os() {
+        for absolute in [
+            "C:/data/a.csv",
+            r"c:\data\a.csv",
+            "//server/share/a.csv",
+            r"\\server\share\a.csv",
+            "/data/a.csv",
+        ] {
+            assert!(is_absolute_path(absolute), "{absolute}");
+        }
+        for relative in ["a.csv", "data/a.csv", r"..\a.csv", "C:a.csv", "./a.csv"] {
+            assert!(!is_absolute_path(relative), "{relative}");
+        }
+    }
 }

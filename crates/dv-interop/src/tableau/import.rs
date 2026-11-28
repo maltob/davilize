@@ -390,7 +390,7 @@ fn locate_file(ctx: &mut Ctx<'_>, directory: &str, filename: &str) -> String {
     }
     let candidate = {
         let p = PathBuf::from(&wanted);
-        if p.is_absolute() {
+        if crate::util::is_absolute_path(&wanted) {
             p
         } else {
             ctx.twb_dir.join(p)

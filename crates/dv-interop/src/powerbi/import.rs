@@ -490,7 +490,11 @@ struct TableInfo {
 fn data_path(raw: &str, base: &Path, out_dir: &Path) -> (String, bool) {
     let normalised = raw.replace('\\', "/");
     let p = PathBuf::from(&normalised);
-    let absolute = if p.is_absolute() { p } else { base.join(p) };
+    let absolute = if crate::util::is_absolute_path(&normalised) {
+        p
+    } else {
+        base.join(p)
+    };
     let exists = crate::fsx::exists(&absolute);
     let shown = match absolute.strip_prefix(out_dir) {
         Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
