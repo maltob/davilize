@@ -174,7 +174,23 @@ impl Engine {
                 }
             }
         }
-        let conversions = dv_sql::infer::refine_columns(&samples);
+        let proposed = dv_sql::infer::refine_columns(&samples);
+        // The sample only proposes; a column is converted only if all of it reads.
+        let conversions = match dv_sql::infer::verification_sql(&sql::quote_ident(view), &proposed)
+        {
+            None => proposed,
+            Some(check) => {
+                let mut failures = Vec::new();
+                for batch in self.query(&check)? {
+                    for index in 0..batch.num_columns() {
+                        let text = array_value_to_string(batch.column(index), 0)
+                            .map_err(|e| EngineError::Unsupported(e.to_string()))?;
+                        failures.push(text.parse::<i64>().unwrap_or(1));
+                    }
+                }
+                dv_sql::infer::keep_readable(proposed, &failures)
+            }
+        };
         let Some(replace) = dv_sql::infer::replace_clause(&conversions) else {
             return Ok(());
         };

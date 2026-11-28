@@ -499,6 +499,65 @@ fn sql_errors_surface_as_duckdb_errors() {
 }
 
 #[test]
+fn a_late_value_that_does_not_fit_keeps_the_column_as_text() {
+    // The first 100 rows look like prices, dates and counts; later rows do not. Converting would
+    // turn those values into NULL (or drop a leading zero), so every column stays as written.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("late.csv");
+    let mut csv = String::from(
+        "price,joined,qty,good
+",
+    );
+    for i in 1..=150 {
+        let (price, joined, qty) = match i {
+            140 => (
+                "tbd".to_string(),
+                "Jan 5 2025".to_string(),
+                "n/a".to_string(),
+            ),
+            145 => (
+                "$1.00".to_string(),
+                "sometime".to_string(),
+                "007".to_string(),
+            ),
+            _ => ("$1.00".to_string(), "Jan 5 2025".to_string(), i.to_string()),
+        };
+        csv.push_str(&format!(
+            "{price},{joined},{qty},$2.50
+"
+        ));
+    }
+    fs::write(&path, csv).unwrap();
+    let engine = Engine::new().unwrap();
+    engine
+        .register_source(&csv_source("late", &path), Path::new(""))
+        .unwrap();
+    let types: std::collections::HashMap<String, String> = engine
+        .schema("late")
+        .unwrap()
+        .into_iter()
+        .map(|c| (c.name, c.data_type))
+        .collect();
+    assert_eq!(types["price"], "VARCHAR");
+    assert_eq!(types["joined"], "VARCHAR");
+    assert_eq!(
+        types["qty"], "VARCHAR",
+        "a later leading zero would be lost"
+    );
+    assert_eq!(
+        types["good"], "DOUBLE",
+        "a column that fully fits is still converted"
+    );
+    assert_eq!(
+        first_count(
+            &engine,
+            r#"SELECT count(*) FROM "late" WHERE price = 'tbd'"#
+        ),
+        1
+    );
+}
+
+#[test]
 fn awkward_csv_columns_are_read_as_numbers_and_dates() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("awkward.csv");

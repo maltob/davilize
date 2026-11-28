@@ -7,8 +7,10 @@
 //! SQL expression that reads the column as a number or a date. Text such as zip codes with
 //! leading zeros is left alone.
 //!
-//! Values past the sample that do not fit become NULL when the column is read, so the sample has
-//! to be representative; a column with even one value that does not fit inside it stays text.
+//! The sample only proposes a conversion. Before it is used, [`verification_sql`] counts the
+//! values anywhere in the column that would not read (they would become NULL, or lose a leading
+//! zero), and [`keep_readable`] drops every conversion with even one. A column is converted only
+//! when all of it fits, so no value is ever lost.
 
 use crate::{quote_ident, quote_literal};
 
@@ -43,13 +45,32 @@ pub struct Conversion {
     pub target: Target,
     /// An expression over the column, for use in `SELECT * REPLACE (<expr> AS "<column>")`.
     pub expr: String,
+    /// A SQL condition over the column, true for a value that this conversion would not read
+    /// faithfully (see [`verification_sql`]).
+    pub unreadable: String,
+}
+
+impl Conversion {
+    /// `<expr> AS "<column>"`, one entry of a `* REPLACE (...)` clause.
+    pub fn replace_part(&self) -> String {
+        format!("{} AS {}", self.expr, quote_ident(&self.column))
+    }
 }
 
 /// Markers that mean "no value" and are read as NULL when a number column is converted.
+const MISSING: [&str; 9] = ["", "n/a", "na", "null", "none", "nan", "-", "--", "?"];
+
 fn is_missing(value: &str) -> bool {
-    matches!(
-        value.to_ascii_lowercase().as_str(),
-        "" | "n/a" | "na" | "null" | "none" | "nan" | "-" | "--" | "?"
+    MISSING.contains(&value.to_ascii_lowercase().as_str())
+}
+
+/// SQL that is true for a value that is present and not a missing marker.
+fn present_sql(column: &str) -> String {
+    let list: Vec<String> = MISSING.iter().map(|m| quote_literal(m)).collect();
+    let c = quote_ident(column);
+    format!(
+        "({c} IS NOT NULL AND lower(trim(CAST({c} AS VARCHAR))) NOT IN ({}))",
+        list.join(", ")
     )
 }
 
@@ -236,10 +257,16 @@ fn as_number(column: &str, real: &[&str], marker: bool) -> Option<Conversion> {
     let expr = format!(
         r"TRY_CAST(regexp_replace(regexp_replace(trim(CAST({c} AS VARCHAR)), '^\((.*)\)$', '-\1'), '[$€£¥,%\s]', '', 'g') AS {sql_type})"
     );
+    // A value that does not read becomes NULL, and a code with a leading zero would lose it.
+    let unreadable = format!(
+        r"({} AND ({expr} IS NULL OR regexp_matches(trim(CAST({c} AS VARCHAR)), '^\(?[-+]?[$€£¥]?\s*0[0-9]')))",
+        present_sql(column)
+    );
     Some(Conversion {
         column: column.to_string(),
         target,
         expr,
+        unreadable,
     })
 }
 
@@ -253,10 +280,12 @@ fn as_date(column: &str, real: &[&str]) -> Option<Conversion> {
         "CAST(try_strptime(trim(CAST({c} AS VARCHAR)), {}) AS DATE)",
         quote_literal(format)
     );
+    let unreadable = format!("({} AND {expr} IS NULL)", present_sql(column));
     Some(Conversion {
         column: column.to_string(),
         target: Target::Date,
         expr,
+        unreadable,
     })
 }
 
@@ -273,11 +302,33 @@ pub fn replace_clause(conversions: &[Conversion]) -> Option<String> {
     if conversions.is_empty() {
         return None;
     }
-    let parts: Vec<String> = conversions
-        .iter()
-        .map(|c| format!("{} AS {}", c.expr, quote_ident(&c.column)))
-        .collect();
+    let parts: Vec<String> = conversions.iter().map(Conversion::replace_part).collect();
     Some(format!("* REPLACE ({})", parts.join(", ")))
+}
+
+/// A query over `view` (the text columns as read) giving, per conversion and in order, how many
+/// values in the whole column would not read. `None` when there is nothing to check.
+pub fn verification_sql(view: &str, conversions: &[Conversion]) -> Option<String> {
+    if conversions.is_empty() {
+        return None;
+    }
+    let counts: Vec<String> = conversions
+        .iter()
+        .enumerate()
+        .map(|(i, c)| format!("count(*) FILTER (WHERE {}) AS \"c{i}\"", c.unreadable))
+        .collect();
+    Some(format!("SELECT {} FROM {view}", counts.join(", ")))
+}
+
+/// The conversions whose column has no unreadable value; `failures` is the answer to
+/// [`verification_sql`].
+pub fn keep_readable(conversions: Vec<Conversion>, failures: &[i64]) -> Vec<Conversion> {
+    conversions
+        .into_iter()
+        .zip(failures)
+        .filter(|(_, bad)| **bad == 0)
+        .map(|(c, _)| c)
+        .collect()
 }
 
 #[cfg(test)]

@@ -170,7 +170,7 @@ class WebEngine {
   }
 
   /**
-   * Reads text columns of a CSV as numbers or dates when their first rows say so ("$1,234.50",
+   * Reads text columns of a CSV as numbers or dates when their first rows say so and the whole column reads ("$1,234.50",
    * "12%", "n/a" among numbers, "Jan 5, 2025"). DuckDB has already typed everything else. The
    * rules live in dv-sql (the desktop engine uses the same ones).
    */
@@ -185,9 +185,20 @@ class WebEngine {
       values: rows.map((row: any) => (row[column] === null ? null : String(row[column]))),
     }));
     const w = await wasm();
-    const { replace } = unwrap<{ replace: string | null }>(w.infer_types(JSON.stringify(samples)));
-    if (replace) {
-      await this.run(`CREATE OR REPLACE VIEW ${view} AS SELECT ${replace} FROM read_csv_auto(${literal(file)})`);
+    const { converted } = unwrap<{ converted: { part: string; unreadable: string }[] }>(
+      w.infer_types(JSON.stringify(samples)),
+    );
+    if (converted.length === 0) return;
+    // The sample only proposes: keep a conversion only if every value in the column reads.
+    const counts = await this.run(
+      `SELECT ${converted.map((c, i) => `count(*) FILTER (WHERE ${c.unreadable}) AS "c${i}"`).join(", ")} FROM ${view}`,
+    );
+    const failures = counts.toArray()[0];
+    const kept = converted.filter((_, i) => Number(failures[`c${i}`]) === 0);
+    if (kept.length > 0) {
+      await this.run(
+        `CREATE OR REPLACE VIEW ${view} AS SELECT * REPLACE (${kept.map((c) => c.part).join(", ")}) FROM read_csv_auto(${literal(file)})`,
+      );
     }
   }
 
