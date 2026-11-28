@@ -256,10 +256,10 @@ class WebEngine {
       try {
         await this.describe(layers[index]!.sql);
       } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
+        const raw = error instanceof Error ? error.message : String(error);
         throw apiError(
           "invalid",
-          `calculated field '${field.name}' cannot be evaluated on dataset '${dataset.name}': ${reason}`,
+          `calculated field '${field.name}' cannot be evaluated on dataset '${dataset.name}': ${w.calc_friendly_reason(raw)}`,
         );
       }
     }

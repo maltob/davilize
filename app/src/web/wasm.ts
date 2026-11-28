@@ -12,6 +12,7 @@ interface DvWasm {
   dataset_layers(datasetJson: string, baseSql: string, baseColumnsJson: string): string;
   calc_parse_query(field: string, expression: string): string;
   calc_verify(field: string, serialized: string): string;
+  calc_friendly_reason(raw: string): string;
   compile_visual(
     visualJson: string,
     parametersJson: string,
@@ -47,7 +48,7 @@ let loading: Promise<DvWasm> | undefined;
 export function wasm(): Promise<DvWasm> {
   loading ??= (async () => {
     const module = await import(/* @vite-ignore */ assetUrl("pkg/dv_wasm.js"));
-    await module.default(assetUrl("pkg/dv_wasm_bg.wasm"));
+    await module.default({ module_or_path: assetUrl("pkg/dv_wasm_bg.wasm") });
     return module as DvWasm;
   })();
   return loading;

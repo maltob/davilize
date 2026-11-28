@@ -160,9 +160,56 @@ pub fn verify(field: &str, serialized: &str) -> Result<(), SqlError> {
         .map_err(|e| fail(field, format!("cannot read the parsed expression: {e}")))?;
     if root["error"] == Value::Bool(true) {
         let message = root["error_message"].as_str().unwrap_or("syntax error");
-        return Err(fail(field, format!("invalid expression: {message}")));
+        return Err(fail(
+            field,
+            format!("invalid expression: {}", friendly_reason(message)),
+        ));
     }
     check_tree(&root).map_err(|reason| fail(field, reason))
+}
+
+/// Turns a DuckDB error about a calculated field into something a report author can act on:
+/// no error-class prefix, no echo of the generated SQL, a plain "unknown field" with a
+/// suggestion, and no "near )" for syntax errors (that bracket is added by the wrapper query,
+/// not typed by the author).
+pub fn friendly_reason(raw: &str) -> String {
+    let mut text = raw.trim();
+    for prefix in [
+        "Binder Error: ",
+        "Parser Error: ",
+        "Catalog Error: ",
+        "Conversion Error: ",
+        "Invalid Input Error: ",
+    ] {
+        if let Some(rest) = text.strip_prefix(prefix) {
+            text = rest;
+            break;
+        }
+    }
+    // DuckDB appends "LINE 1: <the generated SQL> ^" to many messages.
+    if let Some(at) = text.find("\nLINE ").or_else(|| text.find(" LINE 1:")) {
+        text = text[..at].trim_end();
+    }
+
+    if let Some(rest) = text.strip_prefix("Referenced column \"") {
+        if let Some((name, tail)) = rest.split_once('"') {
+            let suggestion = tail
+                .split("Candidate bindings: ")
+                .nth(1)
+                .and_then(|list| list.split('"').nth(1))
+                .map(|candidate| candidate.rsplit('.').next().unwrap_or(candidate));
+            return match suggestion {
+                Some(candidate) => {
+                    format!("unknown field \"{name}\" (did you mean \"{candidate}\"?)")
+                }
+                None => format!("unknown field \"{name}\""),
+            };
+        }
+    }
+    if text.starts_with("syntax error") {
+        return "syntax error: check for a missing value, bracket or comma".to_string();
+    }
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn fail(field: &str, reason: String) -> SqlError {
@@ -335,5 +382,45 @@ fn check_function(node: &Value) -> Result<(), String> {
         Err(format!(
             "function '{name}' is not allowed (see docs/reports.md for the allowed functions)"
         ))
+    }
+}
+
+#[cfg(test)]
+mod friendly_reason_tests {
+    use super::friendly_reason;
+
+    #[test]
+    fn unknown_fields_get_a_suggestion_and_lose_the_generated_sql() {
+        let raw = "Binder Error: Referenced column \"seatz\" not found in FROM clause!\n\
+                   Candidate bindings: \"seats\", \"user_id\"\n\n\
+                   LINE 1: DESCRIBE SELECT *, (mrr / seatz) AS \"bad\" FROM (SELECT 1)\n                                 ^";
+        assert_eq!(
+            friendly_reason(raw),
+            "unknown field \"seatz\" (did you mean \"seats\"?)"
+        );
+    }
+
+    #[test]
+    fn unknown_fields_without_candidates_are_still_plain() {
+        assert_eq!(
+            friendly_reason("Binder Error: Referenced column \"x\" not found in FROM clause!"),
+            "unknown field \"x\""
+        );
+    }
+
+    #[test]
+    fn syntax_errors_do_not_blame_the_wrapper_bracket() {
+        assert_eq!(
+            friendly_reason("syntax error at or near \")\""),
+            "syntax error: check for a missing value, bracket or comma"
+        );
+    }
+
+    #[test]
+    fn other_messages_lose_the_class_prefix_and_extra_whitespace() {
+        assert_eq!(
+            friendly_reason("Conversion Error:  Could not convert string 'a'\n to INT32 LINE 1: x"),
+            "Could not convert string 'a' to INT32"
+        );
     }
 }

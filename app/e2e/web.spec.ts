@@ -11,10 +11,13 @@ const generated = (name: string) => resolve(here, "../../site/examples", name);
 
 /** Clicks `button`, which opens the browser's file chooser, and answers it with `files`. */
 async function choose(page: Page, button: string, files: string[], exact = true) {
-  const [chooser] = await Promise.all([
-    page.waitForEvent("filechooser"),
-    page.getByRole("button", { name: button, exact }).click(),
-  ]);
+  // Open, Import and Save as live in the File menu.
+  const inFileMenu = ["Open report", "Import Tableau / Power BI...", "Import Power BI folder..."].includes(button);
+  if (inFileMenu) await page.getByRole("button", { name: "File", exact: true }).click();
+  const target = inFileMenu
+    ? page.getByRole("menuitem", { name: button, exact })
+    : page.getByRole("button", { name: button, exact });
+  const [chooser] = await Promise.all([page.waitForEvent("filechooser"), target.click()]);
   await chooser.setFiles(files);
 }
 
@@ -40,7 +43,34 @@ test("the sample report opens and draws its charts", async ({ page }) => {
   await page.getByRole("button", { name: "Try the sample report" }).click();
   await expect(page).toHaveTitle(/Sample sales - Davilize/);
   await expect(firstChart(page)).toContainText("West");
-  await expect(page.getByRole("tab", { name: /Report \(4\)/ })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /All charts \(4\)/ })).toBeVisible();
+  // Each chart is a tab along the bottom, and the active one is the chart being edited.
+  await expect(page.getByRole("tab", { name: "Revenue by region" })).toHaveAttribute("aria-selected", "true");
+});
+
+test("charts and dashboards are tabs along the bottom", async ({ page }) => {
+  await page.getByRole("button", { name: "Try the sample report" }).click();
+  await expect(page).toHaveTitle(/Sample sales - Davilize/);
+  await page.getByRole("tab", { name: "Revenue by product and region" }).click();
+  await expect(page.getByLabel("Chart title")).toHaveValue("Revenue by product and region");
+
+  await page.getByRole("button", { name: "New dashboard" }).click();
+  const tabs = page.getByRole("tablist", { name: "Charts and dashboards" });
+  await expect(tabs.getByRole("tab", { selected: true })).toBeVisible();
+  await expect(page.getByLabel("Dashboard title")).toBeVisible();
+
+  // A new dashboard opens in Edit, with the chart tray beside the canvas.
+  await expect(page.getByRole("button", { name: "Edit", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Add Revenue by region to dashboard" }).click();
+  await expect(page.getByRole("group", { name: /^Revenue by region, column 1/ })).toBeVisible();
+  await expect(page.getByRole("complementary", { name: "Charts" })).toContainText("Added");
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await expect(page.getByRole("complementary", { name: "Charts" })).toHaveCount(0);
+
+  await page.getByRole("tab", { name: /All charts/ }).click();
+  await expect(firstChart(page)).toBeVisible();
+  await page.getByRole("button", { name: "New chart" }).click();
+  await expect(page.getByRole("tab", { name: "New chart" })).toHaveAttribute("aria-selected", "true");
 });
 
 test("a report with a join opens and aggregates across it", async ({ page }) => {
@@ -64,6 +94,18 @@ test("a calculated field that reads files is refused", async ({ page }) => {
   await page.locator("#calc-new-name").fill("evil");
   await page.locator("#calc-new-expression").fill("read_csv('/etc/passwd')");
   await expect(page.getByRole("alert").filter({ hasText: "not allowed" })).toBeVisible();
+});
+
+test("a calculated field with a mistyped column suggests the right one", async ({ page }) => {
+  await page.getByRole("button", { name: "Try the sample report" }).click();
+  await expect(page).toHaveTitle(/Sample sales - Davilize/);
+  await page.getByRole("button", { name: "Add calculated field" }).click();
+  await page.locator("#calc-new-name").fill("typo");
+  await page.locator("#calc-new-expression").fill("revenue / unitz");
+  const alert = page.getByRole("alert").filter({ hasText: "unknown field" });
+  await expect(alert).toContainText('did you mean "units"');
+  await expect(alert).not.toContainText("LINE 1");
+  await expect(alert).not.toContainText("Binder Error");
 });
 
 test("a SQLite database source is read in the browser", async ({ page }) => {

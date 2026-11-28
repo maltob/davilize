@@ -40,6 +40,7 @@ import type {
 } from "../types";
 import { ChartView, ShowTableToggle } from "./ChartView";
 import { FilterEditor } from "./FilterEditor";
+import { ChartIcon } from "./icons";
 
 /** Controls and buttons are at least 28px tall; text is at least 12px. */
 const control =
@@ -73,6 +74,10 @@ interface PanelProps {
   values: Record<string, string>;
   blocked: boolean;
   onOpen: (visual: Visual) => void;
+  /** Hides the view picker and New dashboard button, when the page has its own tabs for them. */
+  hideNavigation?: boolean;
+  /** A dashboard that was just created: it opens in Edit mode. */
+  newDashboardId?: string | null;
   /** The "All visuals" view, shown when no dashboard is selected. */
   children: ReactNode;
 }
@@ -89,6 +94,8 @@ export function DashboardsPanel({
   values,
   blocked,
   onOpen,
+  hideNavigation = false,
+  newDashboardId = null,
   children,
 }: PanelProps) {
   const dashboards = report.dashboards ?? [];
@@ -115,11 +122,13 @@ export function DashboardsPanel({
     }
   }, [dashboards, awaitingNew]);
 
-  const mode: DashboardMode = selected ? (modes[selected.id] ?? "view") : "view";
+  const mode: DashboardMode = selected ? (modes[selected.id] ?? (selected.id === newDashboardId ? "edit" : "view")) : "view";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {(selected || !hideNavigation) && (
       <div className="flex flex-wrap items-end gap-2 border-b border-border px-3 py-2">
+        {!hideNavigation && (
         <div className="flex flex-col gap-1">
           <label htmlFor="report-view" className={label}>
             Report view
@@ -138,6 +147,8 @@ export function DashboardsPanel({
             ))}
           </select>
         </div>
+        )}
+        {!hideNavigation && (
         <button
           type="button"
           className={button}
@@ -148,6 +159,7 @@ export function DashboardsPanel({
         >
           New dashboard
         </button>
+        )}
         {selected && (
           <>
             <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -161,14 +173,21 @@ export function DashboardsPanel({
                 className={`${control} w-full max-w-xs`}
               />
             </div>
-            <button
-              type="button"
-              aria-pressed={mode === "edit"}
-              onClick={() => setModes((m) => ({ ...m, [selected.id]: mode === "edit" ? "view" : "edit" }))}
-              className={`${button} ${mode === "edit" ? "border-accent bg-accent text-accent-text hover:bg-accent" : ""}`}
-            >
-              Edit layout
-            </button>
+            <div role="group" aria-label="Dashboard mode" className="flex overflow-hidden rounded-md border border-border">
+              {(["view", "edit"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  aria-pressed={mode === m}
+                  onClick={() => setModes((all) => ({ ...all, [selected.id]: m }))}
+                  className={`min-h-7 px-3 py-1 text-sm font-medium focus-visible:outline-2 focus-visible:outline-accent ${
+                    mode === m ? "bg-accent text-accent-text" : "bg-surface hover:bg-surface-2"
+                  }`}
+                >
+                  {m === "view" ? "Preview" : "Edit"}
+                </button>
+              ))}
+            </div>
             {confirmDelete === selected.id ? (
               <div role="group" aria-label="Confirm delete" className="flex flex-wrap items-center gap-2 text-sm">
                 <span>Delete this dashboard? Its layout is removed and its charts are kept.</span>
@@ -190,7 +209,7 @@ export function DashboardsPanel({
             ) : (
               <button
                 type="button"
-                className={button}
+                className={`${button} text-danger`}
                 onClick={() => setConfirmDelete(selected.id)}
                 aria-label={`Delete dashboard ${selected.title || selected.id}`}
               >
@@ -200,6 +219,7 @@ export function DashboardsPanel({
           </>
         )}
       </div>
+      )}
       {selected ? (
         <DashboardEditor
           key={selected.id}
@@ -320,12 +340,11 @@ function DashboardEditor({
   const [gesture, setGestureState] = useState<Gesture | null>(null);
   const gestureRef = useRef<Gesture | null>(null);
   const [announcement, setAnnouncement] = useState("");
-  const [addChoice, setAddChoice] = useState<string | null>(null);
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
   const [selectedVisual, setSelectedVisual] = useState<string | null>(null);
   // Cards shown as a table instead of a chart, by visual id.
   const [tableCards, setTableCards] = useState<Record<string, boolean>>({});
-  const addRef = useRef<HTMLSelectElement>(null);
+  const trayRef = useRef<HTMLElement>(null);
 
   const setGesture = (next: Gesture | null) => {
     gestureRef.current = next;
@@ -337,11 +356,6 @@ function DashboardEditor({
   const namesOf = (list: readonly DashboardItem[]) =>
     list.map((i) => titleOf(i.visual)).join(", ");
   const visualsOnDashboard = new Set(items.map((i) => i.visual));
-  const available = report.visuals.filter((v) => !visualsOnDashboard.has(v.id));
-  const chosen =
-    addChoice !== null && available.some((v) => v.id === addChoice)
-      ? addChoice
-      : (available[0]?.id ?? "");
   const dragging = gesture !== null;
   const selectedItem = items.find((i) => i.visual === selectedVisual) ?? null;
 
@@ -430,15 +444,14 @@ function DashboardEditor({
     setPendingRemove(null);
     onSave({ ...dashboard, items: items.filter((i) => i.visual !== visual) });
     announce(`Removed ${title} from ${dashboard.title || dashboard.id}.`);
-    addRef.current?.focus();
+    trayRef.current?.focus();
   }
 
-  function addVisual() {
-    if (!chosen) return;
+  function addVisual(id: string) {
     const rect = placeNewItem(items, columns);
-    onSave({ ...dashboard, items: [...items, { visual: chosen, ...rect }] });
+    onSave({ ...dashboard, items: [...items, { visual: id, ...rect }] });
     announce(
-      `Added ${titleOf(chosen)} at column ${rect.x + 1}, row ${rect.y + 1}, ${rect.w} by ${rect.h} cells.`,
+      `Added ${titleOf(id)} at column ${rect.x + 1}, row ${rect.y + 1}, ${rect.w} by ${rect.h} cells.`,
     );
   }
 
@@ -580,268 +593,308 @@ function DashboardEditor({
   const filters: Filter[] = dashboard.filters ?? [];
   const fieldColumns = dashboardColumns(report, dashboard, schemas);
 
-  return (
-    // The one scrolling area of the dashboard: nothing inside it scrolls on its own.
-    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
-      {editing && (
-        <details className="shrink-0 rounded-md border border-border bg-surface px-3 py-2">
-          <summary className="cursor-pointer text-sm font-medium">Grid settings and charts</summary>
-          <div className="mt-2 flex flex-wrap items-end gap-4">
-            <GridSetting
-              id="dashboard-columns"
-              label="Columns"
-              min={GRID_LIMITS.minColumns}
-              max={GRID_LIMITS.maxColumns}
-              value={columns}
-              unitName="columns"
-              onApply={applyColumns}
-            />
-            <GridSetting
-              id="dashboard-row-height"
-              label="Row height (px)"
-              min={GRID_LIMITS.minRowHeight}
-              max={GRID_LIMITS.maxRowHeight}
-              value={dashboard.row_height}
-              unitName="row height"
-              onApply={applyRowHeight}
-            />
-            <div className="flex flex-wrap items-end gap-2">
-              <div className="flex flex-col gap-1">
-                <label htmlFor="dashboard-add-visual" className={label}>
-                  Add chart
-                </label>
-                <select
-                  id="dashboard-add-visual"
-                  ref={addRef}
-                  value={chosen}
-                  onChange={(e) => setAddChoice(e.target.value)}
-                  disabled={available.length === 0}
-                  className={`${control} max-w-56`}
-                >
-                  {available.length === 0 && <option value="">Every chart is on this dashboard</option>}
-                  {available.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.title || v.id}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <button type="button" className={button} onClick={addVisual} disabled={!chosen}>
-                Add to dashboard
-              </button>
-            </div>
-          </div>
-        </details>
-      )}
-      {editing && (
-        <details className="shrink-0 rounded-md border border-border bg-surface px-3 py-1.5">
-          <summary className="cursor-pointer text-xs font-medium">Keyboard help</summary>
-          <p id="dashboard-keys" className="mt-1 text-xs text-muted">
-            {KEY_HELP}
-          </p>
-        </details>
-      )}
-      {editing && selectedItem && (
-        <PositionPanel
-          key={selectedItem.visual}
-          title={titleOf(selectedItem.visual)}
-          item={selectedItem}
-          columns={columns}
-          onApply={(proposed) => applyPosition(selectedItem.visual, proposed, "move")}
-          onResize={(proposed) => applyPosition(selectedItem.visual, proposed, "resize")}
-        />
-      )}
-      <p role="status" aria-live="polite" className="sr-only">
-        {announcement}
+  const sharedFilters = (
+    <div className="flex flex-col gap-3">
+      <p className="text-xs text-muted">
+        Applies to every chart whose dataset has a column with that name. Values can be parameters.
       </p>
+      <FilterEditor
+        title="Filters"
+        filters={filters}
+        columns={fieldColumns}
+        parameters={report.parameters}
+        onChange={(next) => onSave(withDashboardFilters(dashboard, next))}
+      />
+      <FilterNotes report={report} dashboard={dashboard} schemas={schemas} />
+    </div>
+  );
 
-      <div
-        role="region"
-        aria-label="Dashboard canvas"
-        className={`min-w-0 rounded-md border border-border bg-bg p-2 ${editing ? "shrink-0" : "flex min-h-72 flex-1 flex-col"}`}
-      >
-        <div
-          ref={surface}
-          className={`relative ${editing ? "" : "min-h-0 flex-1"}`}
-          style={editing ? { minHeight: minCanvas } : undefined}
+  return (
+    // Edit mode has three places: the chart tray (which charts), the canvas (where they go), and
+    // the inspector on the right (grid, shared filters, or the selected chart's position).
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto min-[1000px]:flex-row min-[1000px]:overflow-hidden">
+      {editing && (
+        <aside
+          ref={trayRef}
+          tabIndex={-1}
+          aria-label="Charts"
+          className="order-2 flex shrink-0 flex-col gap-2 border-t border-border p-3 focus:outline-none min-[1000px]:order-1 min-[1000px]:w-56 min-[1000px]:overflow-y-auto min-[1000px]:border-r min-[1000px]:border-t-0"
         >
-          {editing && (
-            <div aria-hidden="true" className="pointer-events-none absolute inset-0 grid" style={gridStyle}>
-              {Array.from({ length: columns * lineRows }, (_, k) => {
-                const x = k % columns;
-                const y = Math.floor(k / columns);
-                return (
-                  <div
-                    key={k}
-                    className="border border-border/50"
-                    style={{
-                      gridColumn: `${x + 1} / span 1`,
-                      gridRow: `${y + 1} / span 1`,
-                    }}
-                  />
-                );
-              })}
-            </div>
-          )}
-          <div className={`relative grid ${editing ? "" : "h-full"}`} style={gridStyle}>
-            {items.map((item) => {
-              const visual = report.visuals.find((v) => v.id === item.visual);
-              if (!visual) return null;
-              const title = visual.title || visual.id;
-              const box = cellBox(item, metrics);
-              const removing = pendingRemove === item.visual;
-              const editHandlers = editing
-                ? {
-                    onPointerMove: trackGesture,
-                    onPointerUp: finishGesture,
-                    onPointerCancel: cancelGesture,
-                  }
-                : {};
+          <h3 className={label}>Charts</h3>
+          <p className="text-xs text-muted">
+            {report.visuals.length === 0
+              ? "This report has no charts yet. Use + Chart below to build one."
+              : `${items.length} of ${report.visuals.length} on this dashboard. Add a chart to place it on the grid.`}
+          </p>
+          <ul className="flex flex-col gap-1.5">
+            {report.visuals.map((v) => {
+              const title = v.title || v.id;
+              const placed = visualsOnDashboard.has(v.id);
               return (
-                <article
-                  key={item.visual}
-                  role="group"
-                  aria-roledescription={editing ? "dashboard item" : undefined}
-                  aria-label={`${title}, column ${item.x + 1}, row ${item.y + 1}, ${item.w} by ${item.h} cells`}
-                  aria-describedby={editing ? "dashboard-keys" : undefined}
-                  tabIndex={editing ? 0 : undefined}
-                  onFocus={editing ? () => setSelectedVisual(item.visual) : undefined}
-                  onKeyDown={editing ? (e) => onCardKey(e, item) : undefined}
-                  style={{
-                    gridColumn: `${item.x + 1} / span ${item.w}`,
-                    gridRow: `${item.y + 1} / span ${item.h}`,
-                  }}
-                  className={`relative flex min-h-0 min-w-0 flex-col overflow-hidden rounded-md border border-border bg-surface focus-visible:outline-2 focus-visible:outline-accent ${
-                    gesture?.visual === item.visual ? "opacity-50" : ""
-                  }`}
-                >
-                  <header
-                    {...(editing ? { onPointerDown: (e: ReactPointerEvent<HTMLElement>) => beginGesture(e, "move", item) } : {})}
-                    {...editHandlers}
-                    className={`flex items-center gap-2 border-b border-border px-2 py-1 ${
-                      editing ? "cursor-grab touch-none select-none active:cursor-grabbing" : ""
-                    }`}
-                  >
-                    <h3 className="min-w-0 flex-1 truncate text-sm font-semibold" title={title}>
-                      {title}
-                    </h3>
-                    {!removing && visual.chart !== "table" && (
-                      <ShowTableToggle
-                        pressed={tableCards[item.visual] === true}
-                        onToggle={() =>
-                          setTableCards((cards) => ({ ...cards, [item.visual]: cards[item.visual] !== true }))
-                        }
-                      />
-                    )}
-                    {editing &&
-                      (removing ? (
-                        <span role="group" aria-label={`Confirm removal of ${title}`} className="flex items-center gap-1 text-xs">
-                          <span>Remove from dashboard?</span>
-                          <button
-                            type="button"
-                            onClick={() => removeVisual(item.visual)}
-                            aria-label={`Confirm removing ${title} from this dashboard`}
-                            className={`${smallButton} border-danger text-danger`}
-                          >
-                            Confirm
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setPendingRemove(null)}
-                            aria-label={`Cancel removing ${title}`}
-                            className={smallButton}
-                          >
-                            Cancel
-                          </button>
-                        </span>
-                      ) : (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => onOpen(visual)}
-                            aria-label={`Edit ${title}`}
-                            className={smallButton}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setPendingRemove(item.visual)}
-                            aria-label={`Remove ${title} from this dashboard`}
-                            className={smallButton}
-                          >
-                            Remove
-                          </button>
-                        </>
-                      ))}
-                  </header>
-                  <CardBody
-                    visual={visual}
-                    parameters={report.parameters}
-                    values={values}
-                    blocked={blocked}
-                    filters={filters}
-                    showTable={tableCards[item.visual] === true}
-                    fallbackHeight={Math.max(72, Math.floor(box.height - CARD_CHROME_PX))}
-                  />
-                  {editing && (
-                    <div
-                      aria-hidden="true"
-                      title="Drag to resize"
-                      onPointerDown={(e) => beginGesture(e, "resize", item)}
-                      onPointerMove={trackGesture}
-                      onPointerUp={finishGesture}
-                      onPointerCancel={cancelGesture}
-                      className="absolute bottom-0 right-0 h-4 w-4 cursor-nwse-resize touch-none rounded-tl border-l-2 border-t-2 border-border"
-                    />
+                <li key={v.id} className="flex items-center gap-2 rounded-md border border-border bg-surface px-2 py-1.5">
+                  <ChartIcon chart={v.chart} />
+                  <span className="min-w-0 flex-1 truncate text-sm" title={title}>
+                    {title}
+                  </span>
+                  {placed ? (
+                    <span className="text-xs text-muted">Added</span>
+                  ) : (
+                    <button
+                      type="button"
+                      className={smallButton}
+                      aria-label={`Add ${title} to dashboard`}
+                      onClick={() => addVisual(v.id)}
+                    >
+                      Add
+                    </button>
                   )}
-                </article>
+                </li>
               );
             })}
-            {items.length === 0 && (
-              <p className="pointer-events-none col-span-full p-4 text-center text-sm text-muted">
-                {editing
-                  ? "No charts on this dashboard yet. Choose one under Add chart in Grid settings."
-                  : "No charts on this dashboard yet. Choose Edit layout to add one."}
-              </p>
+          </ul>
+        </aside>
+      )}
+
+      <div className="order-1 flex min-w-0 shrink-0 flex-col gap-3 p-3 min-[1000px]:order-2 min-[1000px]:min-h-0 min-[1000px]:flex-1 min-[1000px]:overflow-y-auto">
+        <p role="status" aria-live="polite" className="sr-only">
+          {announcement}
+        </p>
+        <div
+          role="region"
+          aria-label="Dashboard canvas"
+          className={`min-w-0 rounded-md border border-border bg-bg p-2 ${editing ? "shrink-0" : "flex min-h-72 flex-1 flex-col"}`}
+        >
+          <div
+            ref={surface}
+            className={`relative ${editing ? "" : "min-h-0 flex-1"}`}
+            style={editing ? { minHeight: minCanvas } : undefined}
+          >
+            {editing && (
+              <div aria-hidden="true" className="pointer-events-none absolute inset-0 grid overflow-hidden" style={gridStyle}>
+                {Array.from({ length: columns * lineRows }, (_, k) => {
+                  const x = k % columns;
+                  const y = Math.floor(k / columns);
+                  return (
+                    <div
+                      key={k}
+                      className="border border-border/50"
+                      style={{
+                        gridColumn: `${x + 1} / span 1`,
+                        gridRow: `${y + 1} / span 1`,
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            )}
+            <div className={`relative grid ${editing ? "" : "h-full"}`} style={gridStyle}>
+              {items.map((item) => {
+                const visual = report.visuals.find((v) => v.id === item.visual);
+                if (!visual) return null;
+                const title = visual.title || visual.id;
+                const box = cellBox(item, metrics);
+                const removing = pendingRemove === item.visual;
+                const editHandlers = editing
+                  ? {
+                      onPointerMove: trackGesture,
+                      onPointerUp: finishGesture,
+                      onPointerCancel: cancelGesture,
+                    }
+                  : {};
+                return (
+                  <article
+                    key={item.visual}
+                    role="group"
+                    aria-roledescription={editing ? "dashboard item" : undefined}
+                    aria-label={`${title}, column ${item.x + 1}, row ${item.y + 1}, ${item.w} by ${item.h} cells`}
+                    aria-describedby={editing ? "dashboard-keys" : undefined}
+                    tabIndex={editing ? 0 : undefined}
+                    onFocus={editing ? () => setSelectedVisual(item.visual) : undefined}
+                    onKeyDown={editing ? (e) => onCardKey(e, item) : undefined}
+                    style={{
+                      gridColumn: `${item.x + 1} / span ${item.w}`,
+                      gridRow: `${item.y + 1} / span ${item.h}`,
+                    }}
+                    className={`relative flex min-h-0 min-w-0 flex-col overflow-hidden rounded-md border border-border bg-surface focus-visible:outline-2 focus-visible:outline-accent ${
+                      gesture?.visual === item.visual ? "opacity-50" : ""
+                    }`}
+                  >
+                    <header
+                      {...(editing ? { onPointerDown: (e: ReactPointerEvent<HTMLElement>) => beginGesture(e, "move", item) } : {})}
+                      {...editHandlers}
+                      className={`flex items-center gap-2 border-b border-border px-2 py-1 ${
+                        editing ? "cursor-grab touch-none select-none active:cursor-grabbing" : ""
+                      }`}
+                    >
+                      <h3 className="min-w-0 flex-1 truncate text-sm font-semibold" title={title}>
+                        {title}
+                      </h3>
+                      {!removing && visual.chart !== "table" && (
+                        <ShowTableToggle
+                          pressed={tableCards[item.visual] === true}
+                          onToggle={() =>
+                            setTableCards((cards) => ({ ...cards, [item.visual]: cards[item.visual] !== true }))
+                          }
+                        />
+                      )}
+                      {editing &&
+                        (removing ? (
+                          <span role="group" aria-label={`Confirm removal of ${title}`} className="flex items-center gap-1 text-xs">
+                            <span>Remove from dashboard?</span>
+                            <button
+                              type="button"
+                              onClick={() => removeVisual(item.visual)}
+                              aria-label={`Confirm removing ${title} from this dashboard`}
+                              className={`${smallButton} border-danger text-danger`}
+                            >
+                              Confirm
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setPendingRemove(null)}
+                              aria-label={`Cancel removing ${title}`}
+                              className={smallButton}
+                            >
+                              Cancel
+                            </button>
+                          </span>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => onOpen(visual)}
+                              aria-label={`Edit ${title}`}
+                              className={smallButton}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setPendingRemove(item.visual)}
+                              aria-label={`Remove ${title} from this dashboard`}
+                              className={smallButton}
+                            >
+                              Remove
+                            </button>
+                          </>
+                        ))}
+                    </header>
+                    <CardBody
+                      visual={visual}
+                      parameters={report.parameters}
+                      values={values}
+                      blocked={blocked}
+                      filters={filters}
+                      showTable={tableCards[item.visual] === true}
+                      fallbackHeight={Math.max(72, Math.floor(box.height - CARD_CHROME_PX))}
+                    />
+                    {editing && (
+                      <div
+                        aria-hidden="true"
+                        title="Drag to resize"
+                        onPointerDown={(e) => beginGesture(e, "resize", item)}
+                        onPointerMove={trackGesture}
+                        onPointerUp={finishGesture}
+                        onPointerCancel={cancelGesture}
+                        className="absolute bottom-0 right-0 h-4 w-4 cursor-nwse-resize touch-none rounded-tl border-l-2 border-t-2 border-border"
+                      />
+                    )}
+                  </article>
+                );
+              })}
+              {items.length === 0 && (
+                <p className="pointer-events-none col-span-full p-4 text-center text-sm text-muted">
+                  {editing
+                    ? "No charts on this dashboard yet. Press Add next to a chart in the Charts list."
+                    : "No charts on this dashboard yet. Switch to Edit to add one."}
+                </p>
+              )}
+            </div>
+            {ghost && (
+              <div
+                aria-hidden="true"
+                className={`pointer-events-none absolute z-10 flex flex-col gap-0.5 overflow-hidden rounded-md border-2 border-dashed p-1 text-xs motion-safe:transition-[left,top,width,height] motion-safe:duration-100 ${
+                  ghost.check.valid ? "border-accent bg-accent/10" : "border-danger bg-danger-bg/70 text-danger"
+                }`}
+                style={{
+                  left: ghost.box.left,
+                  top: ghost.box.top,
+                  width: ghost.box.width,
+                  height: ghost.box.height,
+                }}
+              >
+                {!ghost.check.valid && <span className="font-medium">Overlaps {namesOf(ghost.check.blockers)}</span>}
+              </div>
             )}
           </div>
-          {ghost && (
-            <div
-              aria-hidden="true"
-              className={`pointer-events-none absolute z-10 flex flex-col gap-0.5 overflow-hidden rounded-md border-2 border-dashed p-1 text-xs motion-safe:transition-[left,top,width,height] motion-safe:duration-100 ${
-                ghost.check.valid ? "border-accent bg-accent/10" : "border-danger bg-danger-bg/70 text-danger"
-              }`}
-              style={{
-                left: ghost.box.left,
-                top: ghost.box.top,
-                width: ghost.box.width,
-                height: ghost.box.height,
-              }}
-            >
-              {!ghost.check.valid && <span className="font-medium">Overlaps {namesOf(ghost.check.blockers)}</span>}
-            </div>
-          )}
         </div>
+
+        {!editing && (
+          <details className="shrink-0 rounded-md border border-border bg-surface p-3">
+            <summary className="cursor-pointer text-sm font-medium">Filters for all charts ({filters.length})</summary>
+            <div className="mt-3">{sharedFilters}</div>
+          </details>
+        )}
       </div>
 
-      <details open={editing} className="shrink-0 rounded-md border border-border bg-surface p-3">
-        <summary className="cursor-pointer text-sm font-medium">Shared filters ({filters.length})</summary>
-        <div className="mt-3 flex flex-col gap-3">
-          <p className="text-xs text-muted">
-            A shared filter applies to every chart on this dashboard whose dataset has a column with that name.
-            Values can be parameters, which are set in the parameter values bar above. Shared filters are rows only.
-          </p>
-          <FilterEditor
-            title="Filters"
-            filters={filters}
-            columns={fieldColumns}
-            parameters={report.parameters}
-            onChange={(next) => onSave(withDashboardFilters(dashboard, next))}
-          />
-          <FilterNotes report={report} dashboard={dashboard} schemas={schemas} />
-        </div>
-      </details>
+      {editing && (
+        <aside
+          aria-label={selectedItem ? "Chart position and size" : "Dashboard settings"}
+          className="order-3 flex shrink-0 flex-col gap-4 border-t border-border p-3 min-[1000px]:w-64 min-[1000px]:overflow-y-auto min-[1000px]:border-l min-[1000px]:border-t-0"
+        >
+          {selectedItem ? (
+            <>
+              <button type="button" className={`${smallButton} self-start`} onClick={() => setSelectedVisual(null)}>
+                Back to dashboard settings
+              </button>
+              <PositionPanel
+                key={selectedItem.visual}
+                title={titleOf(selectedItem.visual)}
+                item={selectedItem}
+                columns={columns}
+                onApply={(proposed) => applyPosition(selectedItem.visual, proposed, "move")}
+                onResize={(proposed) => applyPosition(selectedItem.visual, proposed, "resize")}
+              />
+            </>
+          ) : (
+            <>
+              <section aria-label="Grid" className="flex flex-col gap-2">
+                <h3 className={label}>Grid</h3>
+                <div className="flex flex-wrap items-end gap-4">
+                  <GridSetting
+                    id="dashboard-columns"
+                    label="Columns"
+                    min={GRID_LIMITS.minColumns}
+                    max={GRID_LIMITS.maxColumns}
+                    value={columns}
+                    unitName="columns"
+                    onApply={applyColumns}
+                  />
+                  <GridSetting
+                    id="dashboard-row-height"
+                    label="Row height (px)"
+                    min={GRID_LIMITS.minRowHeight}
+                    max={GRID_LIMITS.maxRowHeight}
+                    value={dashboard.row_height}
+                    unitName="row height"
+                    onApply={applyRowHeight}
+                  />
+                </div>
+              </section>
+              <section aria-label="Filters for all charts" className="flex flex-col gap-2">
+                <h3 className={label}>Filters for all charts ({filters.length})</h3>
+                {sharedFilters}
+              </section>
+            </>
+          )}
+          <details className="text-xs text-muted">
+            <summary className="cursor-pointer font-medium text-text">Keyboard shortcuts</summary>
+            <p id="dashboard-keys" className="mt-1">
+              {KEY_HELP}
+            </p>
+          </details>
+        </aside>
+      )}
     </div>
   );
 }

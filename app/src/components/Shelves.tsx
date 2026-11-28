@@ -18,15 +18,6 @@ import { FIELD_MIME, type FieldTarget } from "./DataPanel";
 import { FilterEditor } from "./FilterEditor";
 import { ChartIcon } from "./icons";
 
-interface Props {
-  visual: Visual;
-  slots: Slots;
-  columns: ColumnView[];
-  parameters: Parameter[];
-  onSlot: (slot: Slot, pill: Pill | null) => void;
-  onFieldDrop: (column: ColumnView, target: FieldTarget) => void;
-  onChange: (patch: Partial<Visual>) => void;
-}
 
 /** Controls are at least 24px tall and text is at least 12px. */
 const control =
@@ -121,116 +112,165 @@ function dropClass(drag: DropCheck | null): string {
   return drag.valid ? "border-accent bg-accent/10" : "border-danger bg-danger-bg";
 }
 
-export function Shelves({ visual, slots, columns, parameters, onSlot, onFieldDrop, onChange }: Props) {
+interface ShelfProps {
+  visual: Visual;
+  slots: Slots;
+  onSlot: (slot: Slot, pill: Pill | null) => void;
+  onFieldDrop: (column: ColumnView, target: FieldTarget) => void;
+}
+
+/** The shelves for the given slots, in the order the slots are defined. */
+function SlotShelves({ keys, visual, slots, onSlot, onFieldDrop }: ShelfProps & { keys: Slot[] }) {
   const emptyHint = emptyChartHint(visual.chart, slots);
   return (
-    <div className="flex flex-col gap-3">
-      <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-        {SLOTS.map((slot) => (
-          <ShelfSlot
-            key={slot.key}
-            id={`shelf-${slot.key}`}
-            label={slot.label}
-            hint={slot.hint}
-            pill={slots[slot.key]}
-            check={slotCheck(visual.chart, slot.key, slot.label)}
-            describedBy={emptyHint ? "shelves-empty-hint" : undefined}
-            onDrop={(column) => onFieldDrop(column, slot.key)}
-            onChange={(pill) => onSlot(slot.key, pill)}
-          />
-        ))}
-      </div>
-      {emptyHint && (
-        <p id="shelves-empty-hint" role="status" className="rounded-md bg-surface-2 px-2 py-1 text-sm text-text">
-          {emptyHint}
-        </p>
-      )}
-
-      <div className="grid grid-cols-1 gap-3">
-        <FiltersShelf
-          visual={visual}
-          columns={columns}
-          parameters={parameters}
-          onChange={onChange}
-          onDrop={(column) => onFieldDrop(column, "filter")}
+    <>
+      {SLOTS.filter((slot) => keys.includes(slot.key)).map((slot) => (
+        <ShelfSlot
+          key={slot.key}
+          id={`shelf-${slot.key}`}
+          label={slot.label}
+          hint={slot.hint}
+          pill={slots[slot.key]}
+          check={slotCheck(visual.chart, slot.key, slot.label)}
+          describedBy={emptyHint ? "shelves-empty-hint" : undefined}
+          onDrop={(column) => onFieldDrop(column, slot.key)}
+          onChange={(pill) => onSlot(slot.key, pill)}
         />
-        <div className="flex flex-col gap-3">
-          <fieldset className="flex flex-col gap-1">
-            <legend className="text-xs font-semibold uppercase tracking-wide text-muted">Chart type</legend>
-            <div
-              role="radiogroup"
-              aria-label="Chart type"
-              aria-describedby="chart-type-hint"
-              className="grid grid-cols-5 gap-1"
-            >
-              {CHART_TYPES.map((chart) => {
-                const checked = visual.chart === chart.value;
-                return (
-                  <label
-                    key={chart.value}
-                    className={`flex min-h-7 cursor-pointer flex-col items-center justify-center rounded-md border px-1 py-0.5 text-center text-xs font-medium focus-within:outline-2 focus-within:outline-accent ${
-                      checked ? "border-accent bg-accent/15" : "border-border bg-surface hover:bg-surface-2"
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name="chart-type"
-                      value={chart.value}
-                      checked={checked}
-                      onChange={() => onChange({ chart: chart.value as ChartType })}
-                      className="sr-only"
-                    />
-                    <ChartIcon chart={chart.value as ChartType} />
-                    {chart.label}
-                  </label>
-                );
-              })}
-            </div>
-            <p id="chart-type-hint" className="text-xs text-muted">
-              {CHART_HINTS[visual.chart]}
-            </p>
-          </fieldset>
-          <div className="grid grid-cols-2 gap-2">
-            <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-muted">
-              Sort by
-              <select
-                className={`${control} normal-case tracking-normal`}
-                value={visual.sort?.by ?? ""}
-                onChange={(event) => {
-                  const by = event.target.value;
-                  onChange({ sort: by ? { by, direction: visual.sort?.direction ?? "desc" } : null });
-                }}
+      ))}
+    </>
+  );
+}
+
+/** Columns and Rows as two full-width strips above the chart, the way Tableau lays them out. */
+export function AxisShelves(props: ShelfProps) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <SlotShelves keys={["x", "y"]} {...props} />
+    </div>
+  );
+}
+
+/** Why the chart is empty, in the shelves' own words. Each shelf points at it with aria-describedby. */
+export function ShelvesHint({ visual, slots }: { visual: Visual; slots: Slots }) {
+  const emptyHint = emptyChartHint(visual.chart, slots);
+  if (!emptyHint) return null;
+  return (
+    <p id="shelves-empty-hint" role="status" className="rounded-md bg-surface-2 px-2 py-1 text-sm text-text">
+      {emptyHint}
+    </p>
+  );
+}
+
+/** Row filters, for the cards column. */
+export function FiltersCard({
+  visual,
+  columns,
+  parameters,
+  onChange,
+  onFieldDrop,
+}: {
+  visual: Visual;
+  columns: ColumnView[];
+  parameters: Parameter[];
+  onChange: (patch: Partial<Visual>) => void;
+  onFieldDrop: (column: ColumnView, target: FieldTarget) => void;
+}) {
+  return (
+    <FiltersShelf
+      visual={visual}
+      columns={columns}
+      parameters={parameters}
+      onChange={onChange}
+      onDrop={(column) => onFieldDrop(column, "filter")}
+    />
+  );
+}
+
+/** Chart type, Color, Size, sort and row limit: everything that shapes the marks, for the cards column. */
+export function MarksCard({
+  visual,
+  slots,
+  parameters,
+  onSlot,
+  onFieldDrop,
+  onChange,
+}: ShelfProps & { parameters: Parameter[]; onChange: (patch: Partial<Visual>) => void }) {
+  return (
+    <div className="flex flex-col gap-3">
+      <fieldset className="flex flex-col gap-1">
+        <legend className="text-xs font-semibold uppercase tracking-wide text-muted">Chart type</legend>
+        <div
+          role="radiogroup"
+          aria-label="Chart type"
+          aria-describedby="chart-type-hint"
+          className="grid grid-cols-3 gap-1"
+        >
+          {CHART_TYPES.map((chart) => {
+            const checked = visual.chart === chart.value;
+            return (
+              <label
+                key={chart.value}
+                className={`flex min-h-7 cursor-pointer flex-col items-center justify-center rounded-md border px-1 py-0.5 text-center text-xs font-medium focus-within:outline-2 focus-within:outline-accent ${
+                  checked ? "border-accent bg-accent/15" : "border-border bg-surface hover:bg-surface-2"
+                }`}
               >
-                <option value="">None</option>
-                {outputNames(visual).map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-muted">
-              Direction
-              <select
-                className={`${control} normal-case tracking-normal`}
-                value={visual.sort?.direction ?? "desc"}
-                disabled={!visual.sort}
-                onChange={(event) =>
-                  visual.sort &&
-                  onChange({ sort: { by: visual.sort.by, direction: event.target.value as "asc" | "desc" } })
-                }
-              >
-                <option value="desc">Descending</option>
-                <option value="asc">Ascending</option>
-              </select>
-            </label>
-            <LimitField
-              limit={visual.limit}
-              parameters={parameters}
-              onChange={(limit) => onChange({ limit })}
-            />
-          </div>
+                <input
+                  type="radio"
+                  name="chart-type"
+                  value={chart.value}
+                  checked={checked}
+                  onChange={() => onChange({ chart: chart.value as ChartType })}
+                  className="sr-only"
+                />
+                <ChartIcon chart={chart.value as ChartType} />
+                {chart.label}
+              </label>
+            );
+          })}
         </div>
+        <p id="chart-type-hint" className="text-xs text-muted">
+          {CHART_HINTS[visual.chart]}
+        </p>
+      </fieldset>
+
+      <div className="flex flex-col gap-1.5">
+        <SlotShelves keys={["color", "size"]} visual={visual} slots={slots} onSlot={onSlot} onFieldDrop={onFieldDrop} />
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-muted">
+          Sort by
+          <select
+            className={`${control} normal-case tracking-normal`}
+            value={visual.sort?.by ?? ""}
+            onChange={(event) => {
+              const by = event.target.value;
+              onChange({ sort: by ? { by, direction: visual.sort?.direction ?? "desc" } : null });
+            }}
+          >
+            <option value="">None</option>
+            {outputNames(visual).map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-muted">
+          Direction
+          <select
+            className={`${control} normal-case tracking-normal`}
+            value={visual.sort?.direction ?? "desc"}
+            disabled={!visual.sort}
+            onChange={(event) =>
+              visual.sort && onChange({ sort: { by: visual.sort.by, direction: event.target.value as "asc" | "desc" } })
+            }
+          >
+            <option value="desc">Descending</option>
+            <option value="asc">Ascending</option>
+          </select>
+        </label>
+        <LimitField limit={visual.limit} parameters={parameters} onChange={(limit) => onChange({ limit })} />
       </div>
     </div>
   );

@@ -16,7 +16,7 @@ import { DataPanel, type FieldTarget } from "./components/DataPanel";
 import { HelpDialog } from "./components/HelpDialog";
 import { Welcome } from "./components/Welcome";
 import { ParameterValuesBar } from "./components/Parameters";
-import { Shelves } from "./components/Shelves";
+import { AxisShelves, FiltersCard, MarksCard, ShelvesHint } from "./components/Shelves";
 import { canRedo, canUndo, createHistory, push, redo, redoLabel, replace, undo, undoLabel, type History } from "./history";
 import { useDatasetTable, useRender } from "./hooks";
 import {
@@ -77,7 +77,27 @@ interface Toast {
   text: string;
 }
 type View = "builder" | "report";
-const VIEWS: readonly View[] = ["builder", "report"];
+
+/** One tab in the strip along the bottom: the overview, a chart, or a dashboard. */
+interface TabItem {
+  key: string;
+  label: string;
+  kind: "overview" | "chart" | "dashboard";
+  active: boolean;
+  select: () => void;
+}
+
+/** A small grid mark that tells a dashboard tab from a chart tab. */
+function DashboardGlyph() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round">
+      <rect x="3" y="3" width="8" height="8" />
+      <rect x="13" y="3" width="8" height="5" />
+      <rect x="13" y="10" width="8" height="11" />
+      <rect x="3" y="13" width="8" height="8" />
+    </svg>
+  );
+}
 
 const TOAST_MS = 6000;
 const TOAST_LIMIT = 4;
@@ -161,6 +181,10 @@ export default function App() {
   const [draft, setDraft] = useState<Visual | null>(null);
   const [view, setView] = useState<View>("builder");
   const [bottomTab, setBottomTab] = useState<"preview" | "profile">("preview");
+  // The data preview is closed until asked for, so a big file is not read just to open a chart.
+  const [dataOpen, setDataOpen] = useState(false);
+  // A dashboard that was just created opens in Edit mode.
+  const [freshDashboardId, setFreshDashboardId] = useState<string | null>(null);
   // The builder's chart shows as a table instead of a chart.
   const [builderTable, setBuilderTable] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -175,7 +199,7 @@ export default function App() {
   // The dashboard shown in the Report tab, or null for "All charts".
   const [dashboardId, setDashboardId] = useState<string | null>(null);
   const [layout, setLayout] = useState<LayoutPrefs>(loadLayout);
-  const tabRefs = useRef<Record<View, HTMLButtonElement | null>>({ builder: null, report: null });
+  const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const dragStart = useRef<{ x: number; width: number } | null>(null);
   const shortcutRef = useRef<(e: KeyboardEvent) => void>(() => undefined);
 
@@ -184,7 +208,7 @@ export default function App() {
   const paramIssues = useMemo(() => parameterIssues(report.parameters, paramValues), [report.parameters, paramValues]);
   const paramsBlocked = Object.keys(paramIssues).length > 0;
   const render = useRender(draft, 250, report.parameters, paramValues, paramsBlocked);
-  const table = useDatasetTable(activeDataset, bottomTab);
+  const table = useDatasetTable(dataOpen ? activeDataset : null, bottomTab);
 
   const savedVisual = draft ? report.visuals.find((v) => v.id === draft.id) : undefined;
   const draftChanged = Boolean(draft) && (!savedVisual || JSON.stringify(savedVisual) !== JSON.stringify(draft));
@@ -282,6 +306,8 @@ export default function App() {
     const dashboard = blankDashboard(report);
     changeReport("Add dashboard", (current) => replaceDashboard(current, dashboard));
     setDashboardId(dashboard.id);
+    setFreshDashboardId(dashboard.id);
+    setView("report");
   }
 
   function saveDashboard(dashboard: Dashboard) {
@@ -509,17 +535,26 @@ export default function App() {
     setLayout((current) => ({ ...current, panelWidth: next }));
   }
 
-  function onTabKey(e: ReactKeyboardEvent<HTMLButtonElement>, current: View) {
-    const index = VIEWS.indexOf(current);
-    let next: View | undefined;
-    if (e.key === "ArrowRight") next = VIEWS[(index + 1) % VIEWS.length];
-    else if (e.key === "ArrowLeft") next = VIEWS[(index - 1 + VIEWS.length) % VIEWS.length];
-    else if (e.key === "Home") next = VIEWS[0];
-    else if (e.key === "End") next = VIEWS[VIEWS.length - 1];
+  /** Arrow keys, Home and End move between the chart and dashboard tabs. */
+  function onTabKey(e: ReactKeyboardEvent<HTMLButtonElement>, current: string) {
+    const index = tabItems.findIndex((tab) => tab.key === current);
+    let next: TabItem | undefined;
+    if (e.key === "ArrowRight") next = tabItems[(index + 1) % tabItems.length];
+    else if (e.key === "ArrowLeft") next = tabItems[(index - 1 + tabItems.length) % tabItems.length];
+    else if (e.key === "Home") next = tabItems[0];
+    else if (e.key === "End") next = tabItems[tabItems.length - 1];
     if (next === undefined) return;
     e.preventDefault();
-    setView(next);
-    tabRefs.current[next]?.focus();
+    next.select();
+    tabRefs.current[next.key]?.focus();
+  }
+
+  /** Starts a blank chart on the dataset in use. */
+  function newChart() {
+    const dataset = draft?.dataset ?? activeDataset;
+    if (!dataset) return;
+    setDraft(blankVisual(dataset, newVisualId(report)));
+    setView("builder");
   }
 
   async function addFiles() {
@@ -631,7 +666,62 @@ export default function App() {
     document.title = `${reportDirty ? "* " : ""}${report.name} - Davilize`;
   }, [report.name, reportDirty]);
 
-  const panelCollapsed = layout.panelCollapsed;
+  // A dashboard has its own chart tray, so the data panel steps aside there and the canvas gets the room.
+  const onDashboard = view === "report" && dashboardId !== null;
+  const panelCollapsed = layout.panelCollapsed || onDashboard;
+
+
+  // One strip of tabs for everything in the report: an overview, each chart, and each dashboard.
+  const tabItems: TabItem[] = [
+    {
+      key: "all",
+      label: `All charts (${report.visuals.length})`,
+      kind: "overview",
+      active: view === "report" && dashboardId === null,
+      select: () => {
+        setDashboardId(null);
+        setView("report");
+      },
+    },
+    ...report.visuals.map(
+      (v): TabItem => ({
+        key: `chart-${v.id}`,
+        label: v.title || v.id,
+        kind: "chart",
+        active: view === "builder" && draft?.id === v.id,
+        select: () => openVisual(v),
+      }),
+    ),
+    ...(draft && !savedVisual
+      ? [
+          {
+            key: "chart-new",
+            label: draft.title || "New chart",
+            kind: "chart" as const,
+            active: view === "builder",
+            select: () => setView("builder"),
+          },
+        ]
+      : []),
+    ...(report.dashboards ?? []).map(
+      (d): TabItem => ({
+        key: `dashboard-${d.id}`,
+        label: d.title || d.id,
+        kind: "dashboard",
+        active: view === "report" && dashboardId === d.id,
+        select: () => {
+          setDashboardId(d.id);
+          setView("report");
+        },
+      }),
+    ),
+  ];
+  const activeTab = tabItems.find((tab) => tab.active);
+  // Keep the selected tab in view when the strip has more tabs than fit.
+  const activeTabKey = activeTab?.key;
+  useEffect(() => {
+    if (activeTabKey) tabRefs.current[activeTabKey]?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [activeTabKey]);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-bg text-text">
@@ -680,6 +770,31 @@ export default function App() {
           aria-label="Report actions"
           className="flex w-full items-center gap-2 overflow-x-auto pb-1 *:shrink-0 *:whitespace-nowrap md:ml-auto md:w-auto md:flex-wrap md:overflow-visible md:pb-0"
         >
+          <FileMenu
+            busy={busy !== null}
+            items={[
+              { label: "Open report", onSelect: openReport },
+              {
+                label: "Import Tableau / Power BI...",
+                title: "Import a Tableau (.twb, .twbx) or Power BI (.pbit, .pbix) file",
+                onSelect: () => importReport(),
+              },
+              ...(isWeb
+                ? [
+                    {
+                      label: "Import Power BI folder...",
+                      title: "Import a Power BI Project folder",
+                      onSelect: () => importReport(true),
+                    },
+                  ]
+                : []),
+              { label: "Save as", onSelect: () => saveReport(true) },
+            ]}
+          />
+          <button type="button" className={button} onClick={() => saveReport(false)} disabled={busy !== null}>
+            Save
+          </button>
+          <span className="mx-1 h-6 w-px bg-border" aria-hidden="true" />
           <button
             type="button"
             className={button}
@@ -710,35 +825,6 @@ export default function App() {
             aria-keyshortcuts="Shift+/"
           >
             Help
-          </button>
-          <button type="button" className={button} onClick={openReport} disabled={busy !== null}>
-            Open report
-          </button>
-          <button
-            type="button"
-            className={button}
-            onClick={() => importReport()}
-            disabled={busy !== null}
-            title="Import a Tableau (.twb, .twbx) or Power BI (.pbit, .pbix) file"
-          >
-            Import Tableau / Power BI...
-          </button>
-          {isWeb && (
-            <button
-              type="button"
-              className={button}
-              onClick={() => importReport(true)}
-              disabled={busy !== null}
-              title="Import a Power BI Project folder"
-            >
-              Import Power BI folder...
-            </button>
-          )}
-          <button type="button" className={button} onClick={() => saveReport(false)} disabled={busy !== null}>
-            Save
-          </button>
-          <button type="button" className={button} onClick={() => saveReport(true)} disabled={busy !== null}>
-            Save as
           </button>
           <span className="mx-1 h-6 w-px bg-border" aria-hidden="true" />
           {/* One group, so the format and its button never wrap onto separate lines. */}
@@ -827,55 +913,14 @@ export default function App() {
         )}
 
         <main id="main-content" tabIndex={-1} className="flex min-h-0 min-w-0 flex-1 flex-col focus:outline-none">
-          <div className="flex items-end gap-2 border-b border-border px-3 pt-2">
-            <div role="tablist" aria-label="Views" className="flex gap-1">
-              {VIEWS.map((name) => (
-                <button
-                  key={name}
-                  id={`tab-${name}`}
-                  ref={(el) => {
-                    tabRefs.current[name] = el;
-                  }}
-                  role="tab"
-                  type="button"
-                  aria-selected={view === name}
-                  aria-controls={`panel-${name}`}
-                  tabIndex={view === name ? 0 : -1}
-                  onClick={() => setView(name)}
-                  onKeyDown={(e) => onTabKey(e, name)}
-                  className={`rounded-t-md px-3 py-1.5 text-sm font-medium focus-visible:outline-2 focus-visible:outline-accent ${
-                    view === name ? "bg-bg text-text ring-1 ring-border" : "text-muted hover:text-text"
-                  }`}
-                >
-                  {name === "builder" ? "Chart builder" : `Report (${report.visuals.length})`}
-                </button>
-              ))}
-            </div>
-            <button
-              type="button"
-              aria-expanded={!panelCollapsed}
-              aria-controls="data-panel"
-              aria-keyshortcuts="Control+B"
-              title="Show or hide the data panel (Ctrl+B)"
-              onClick={togglePanel}
-              className="mb-1.5 ml-auto inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-sm font-medium text-muted hover:bg-surface-2 hover:text-text focus-visible:outline-2 focus-visible:outline-accent"
-            >
-              <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="4" width="18" height="16" rx="2" />
-                <path d="M9 4v16" />
-              </svg>
-              Data panel
-            </button>
-          </div>
-
-          {view === "builder" ? (
-            <div
-              role="tabpanel"
-              id="panel-builder"
-              aria-labelledby="tab-builder"
-              className="flex min-h-0 flex-1 flex-col"
-            >
-              {!draft ? (
+          <div
+            role="tabpanel"
+            id="panel-main"
+            aria-labelledby={activeTab ? `tab-${activeTab.key}` : undefined}
+            className="flex min-h-0 flex-1 flex-col"
+          >
+            {view === "builder" ? (
+              !draft ? (
                 <div className="flex min-h-0 flex-1 overflow-y-auto">
                   {report.datasets.length > 0 ? (
                     <EmptyState hasData onAddFiles={addFiles} />
@@ -890,8 +935,35 @@ export default function App() {
                   )}
                 </div>
               ) : (
-                <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto p-3 min-[1000px]:grid-cols-[minmax(0,45fr)_minmax(0,55fr)] min-[1000px]:grid-rows-[minmax(0,1fr)] min-[1000px]:overflow-hidden">
-                  <div className="flex min-h-0 flex-col gap-3 min-[1000px]:overflow-y-auto min-[1000px]:pr-1">
+                <div className="flex min-h-0 flex-1 flex-col overflow-y-auto min-[1000px]:flex-row min-[1000px]:overflow-hidden">
+                  <aside
+                    aria-label="Filters and marks"
+                    className="order-2 flex shrink-0 flex-col gap-4 border-t border-border p-3 min-[1000px]:order-1 min-[1000px]:w-64 min-[1000px]:overflow-y-auto min-[1000px]:border-r min-[1000px]:border-t-0"
+                  >
+                    <FiltersCard
+                      visual={draft}
+                      columns={columns}
+                      parameters={report.parameters}
+                      onChange={(patch) => updateDraft((v) => ({ ...v, ...patch }))}
+                      onFieldDrop={addField}
+                    />
+                    <section aria-label="Marks" className="flex flex-col gap-2">
+                      <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Marks</h3>
+                      <MarksCard
+                        visual={draft}
+                        slots={slots}
+                        parameters={report.parameters}
+                        onSlot={setSlot}
+                        onFieldDrop={addField}
+                        onChange={(patch) => updateDraft((v) => ({ ...v, ...patch }))}
+                      />
+                    </section>
+                  </aside>
+
+                  <div className="order-1 flex min-w-0 shrink-0 flex-col gap-3 p-3 min-[1000px]:order-2 min-[1000px]:min-h-0 min-[1000px]:flex-1 min-[1000px]:overflow-y-auto">
+                    <AxisShelves visual={draft} slots={slots} onSlot={setSlot} onFieldDrop={addField} />
+                    <ShelvesHint visual={draft} slots={slots} />
+
                     <div className="flex flex-wrap items-end gap-2">
                       <div className="min-w-0 flex-1">
                         <label htmlFor="visual-title" className="text-xs font-semibold uppercase tracking-wide text-muted">
@@ -922,48 +994,11 @@ export default function App() {
                           Delete chart
                         </button>
                       )}
-                      <button
-                        type="button"
-                        className={button}
-                        onClick={() => setDraft(blankVisual(draft.dataset, newVisualId(report)))}
-                      >
-                        New chart
-                      </button>
                     </div>
 
-                    {report.visuals.length > 0 && (
-                      <div role="group" aria-label="Charts in report" className="flex flex-wrap gap-1">
-                        {report.visuals.map((v) => (
-                          <button
-                            key={v.id}
-                            type="button"
-                            aria-pressed={v.id === draft.id}
-                            onClick={() => openVisual(v)}
-                            className={`rounded-md border px-2 py-1 text-xs focus-visible:outline-2 focus-visible:outline-accent ${
-                              v.id === draft.id ? "border-accent bg-accent/15" : "border-border bg-surface hover:bg-surface-2"
-                            }`}
-                          >
-                            {v.title || v.id}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-
-                    <Shelves
-                      visual={draft}
-                      slots={slots}
-                      columns={columns}
-                      parameters={report.parameters}
-                      onSlot={setSlot}
-                      onFieldDrop={addField}
-                      onChange={(patch) => updateDraft((v) => ({ ...v, ...patch }))}
-                    />
-                  </div>
-
-                  <div className="flex min-h-0 flex-col gap-3 min-[1000px]:overflow-y-auto">
                     <section
                       aria-label="Chart"
-                      className="flex min-h-[300px] shrink-0 flex-col gap-2 rounded-md border border-border bg-surface p-3"
+                      className="flex min-h-[320px] shrink-0 flex-col gap-2 rounded-md border border-border bg-surface p-3 min-[1000px]:min-h-[420px]"
                     >
                       <div className="flex items-center gap-2 text-sm text-muted">
                         <span className="font-medium text-text">{draft.title || autoTitle(draft)}</span>
@@ -1014,44 +1049,57 @@ export default function App() {
                       )}
                     </section>
 
-                    <section aria-label="Data" className="flex h-72 shrink-0 flex-col gap-2">
-                      <div role="group" aria-label="Data views" className="flex gap-1">
-                        {(["preview", "profile"] as const).map((mode) => (
-                          <button
-                            key={mode}
-                            type="button"
-                            aria-pressed={bottomTab === mode}
-                            onClick={() => setBottomTab(mode)}
-                            className={`rounded-md px-2.5 py-1 text-xs font-medium focus-visible:outline-2 focus-visible:outline-accent ${
-                              bottomTab === mode ? "bg-accent/15" : "text-muted hover:text-text"
-                            }`}
-                          >
-                            {mode === "preview" ? "Preview (first 500 rows)" : "Column profile"}
-                          </button>
-                        ))}
-                      </div>
-                      <div className="min-h-0 flex-1">
-                        {table.loading && (
-                          <p className="flex items-center gap-2 text-sm text-muted" role="status">
-                            <span className="spinner" aria-hidden="true" /> Loading
-                          </p>
-                        )}
-                        {table.error && (
-                          <p role="alert" className="text-sm text-danger">
-                            {table.error.message}
-                          </p>
-                        )}
-                        {table.table && (
-                          <DataGrid table={table.table} label={bottomTab === "preview" ? "Data preview" : "Column profile"} />
+                    <section aria-label="Data" className="flex shrink-0 flex-col gap-2">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          aria-expanded={dataOpen}
+                          aria-controls="data-drawer"
+                          onClick={() => setDataOpen((open) => !open)}
+                          className="rounded-md px-2 py-1 text-sm font-medium text-muted hover:text-text focus-visible:outline-2 focus-visible:outline-accent"
+                        >
+                          {dataOpen ? "Hide data" : "Show data"}
+                        </button>
+                        {dataOpen && (
+                          <div role="group" aria-label="Data views" className="flex gap-1">
+                            {(["preview", "profile"] as const).map((mode) => (
+                              <button
+                                key={mode}
+                                type="button"
+                                aria-pressed={bottomTab === mode}
+                                onClick={() => setBottomTab(mode)}
+                                className={`rounded-md px-2.5 py-1 text-xs font-medium focus-visible:outline-2 focus-visible:outline-accent ${
+                                  bottomTab === mode ? "bg-accent/15" : "text-muted hover:text-text"
+                                }`}
+                              >
+                                {mode === "preview" ? "Preview (first 500 rows)" : "Column profile"}
+                              </button>
+                            ))}
+                          </div>
                         )}
                       </div>
+                      {dataOpen && (
+                        <div id="data-drawer" className="h-72 min-h-0">
+                          {table.loading && (
+                            <p className="flex items-center gap-2 text-sm text-muted" role="status">
+                              <span className="spinner" aria-hidden="true" /> Loading
+                            </p>
+                          )}
+                          {table.error && (
+                            <p role="alert" className="text-sm text-danger">
+                              {table.error.message}
+                            </p>
+                          )}
+                          {table.table && (
+                            <DataGrid table={table.table} label={bottomTab === "preview" ? "Data preview" : "Column profile"} />
+                          )}
+                        </div>
+                      )}
                     </section>
                   </div>
                 </div>
-              )}
-            </div>
-          ) : (
-            <div role="tabpanel" id="panel-report" aria-labelledby="tab-report" className="flex min-h-0 flex-1 flex-col">
+              )
+            ) : (
               <DashboardsPanel
                 report={report}
                 schemas={schemas}
@@ -1063,6 +1111,8 @@ export default function App() {
                 values={paramValues}
                 blocked={paramsBlocked}
                 onOpen={openVisual}
+                hideNavigation
+                newDashboardId={freshDashboardId}
               >
                 <ReportView
                   visuals={report.visuals}
@@ -1072,13 +1122,177 @@ export default function App() {
                   onOpen={openVisual}
                 />
               </DashboardsPanel>
+            )}
+          </div>
+
+          <div className="flex items-end gap-2 border-t border-border bg-surface px-3 pt-1">
+            <div role="tablist" aria-label="Charts and dashboards" className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
+              {tabItems.map((tab) => (
+                <button
+                  key={tab.key}
+                  id={`tab-${tab.key}`}
+                  ref={(el) => {
+                    tabRefs.current[tab.key] = el;
+                  }}
+                  role="tab"
+                  type="button"
+                  aria-selected={tab.active}
+                  aria-controls="panel-main"
+                  tabIndex={tab.active ? 0 : -1}
+                  onClick={tab.select}
+                  onKeyDown={(e) => onTabKey(e, tab.key)}
+                  title={tab.label}
+                  className={`flex max-w-56 shrink-0 items-center gap-1.5 rounded-b-md px-3 py-1.5 text-sm font-medium focus-visible:outline-2 focus-visible:outline-accent ${
+                    tab.active ? "bg-bg text-text ring-1 ring-border" : "text-muted hover:text-text"
+                  }`}
+                >
+                  {tab.kind === "dashboard" && <DashboardGlyph />}
+                  <span className="truncate">{tab.label}</span>
+                </button>
+              ))}
             </div>
-          )}
+            <div className="mb-1 flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                className={button}
+                aria-label="New chart"
+                title="New chart"
+                onClick={newChart}
+                disabled={!draft && !activeDataset}
+              >
+                + Chart
+              </button>
+              <button
+                type="button"
+                className={button}
+                aria-label="New dashboard"
+                title="New dashboard"
+                onClick={createDashboard}
+                disabled={report.visuals.length === 0}
+              >
+                + Dashboard
+              </button>
+              {!onDashboard && (
+              <button
+                type="button"
+                aria-expanded={!panelCollapsed}
+                aria-controls="data-panel"
+                aria-keyshortcuts="Control+B"
+                title="Show or hide the data panel (Ctrl+B)"
+                onClick={togglePanel}
+                className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-sm font-medium text-muted hover:bg-surface-2 hover:text-text focus-visible:outline-2 focus-visible:outline-accent"
+              >
+                <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="4" width="18" height="16" rx="2" />
+                  <path d="M9 4v16" />
+                </svg>
+                Data panel
+              </button>
+              )}
+            </div>
+          </div>
         </main>
       </div>
 
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
       <HelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
+    </div>
+  );
+}
+
+/**
+ * File actions as one menu: Open, Import, Save as. The menu is fixed-positioned so the phone
+ * toolbar, which scrolls sideways, does not clip it. Arrow keys move, Escape closes.
+ */
+function FileMenu({
+  busy,
+  items,
+}: {
+  busy: boolean;
+  items: { label: string; title?: string; onSelect: () => void }[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [at, setAt] = useState({ left: 0, top: 0 });
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    itemRefs.current[0]?.focus();
+    function onPointerDown(e: PointerEvent) {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [open]);
+
+  function onKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
+    const count = items.length;
+    const index = itemRefs.current.findIndex((el) => el === document.activeElement);
+    let next: number | undefined;
+    if (e.key === "ArrowDown") next = (index + 1) % count;
+    else if (e.key === "ArrowUp") next = (index - 1 + count) % count;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = count - 1;
+    else if (e.key === "Escape") {
+      e.preventDefault();
+      setOpen(false);
+      buttonRef.current?.focus();
+      return;
+    } else if (e.key === "Tab") {
+      setOpen(false);
+      return;
+    }
+    if (next === undefined) return;
+    e.preventDefault();
+    itemRefs.current[next]?.focus();
+  }
+
+  return (
+    <div ref={wrapRef} onKeyDown={open ? onKeyDown : undefined}>
+      <button
+        ref={buttonRef}
+        type="button"
+        className={button}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => {
+          const rect = buttonRef.current?.getBoundingClientRect();
+          if (rect) setAt({ left: rect.left, top: rect.bottom + 4 });
+          setOpen((o) => !o);
+        }}
+      >
+        File
+      </button>
+      {open && (
+        <div
+          role="menu"
+          aria-label="File"
+          style={{ position: "fixed", left: at.left, top: at.top }}
+          className="z-30 flex min-w-60 flex-col rounded-md border border-border bg-surface p-1 shadow-lg"
+        >
+          {items.map((item, i) => (
+            <button
+              key={item.label}
+              ref={(el) => {
+                itemRefs.current[i] = el;
+              }}
+              role="menuitem"
+              type="button"
+              disabled={busy}
+              title={item.title}
+              onClick={() => {
+                setOpen(false);
+                item.onSelect();
+              }}
+              className="rounded px-3 py-1.5 text-left text-sm hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

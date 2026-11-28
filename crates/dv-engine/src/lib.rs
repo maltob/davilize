@@ -344,8 +344,10 @@ impl Engine {
             );
             self.column_names(&layer).map_err(|e| {
                 EngineError::InvalidSpec(format!(
-                    "calculated field '{}' cannot be evaluated on dataset '{}': {e}",
-                    field.name, dataset.name
+                    "calculated field '{}' cannot be evaluated on dataset '{}': {}",
+                    field.name,
+                    dataset.name,
+                    dv_sql::calc::friendly_reason(&e.to_string())
                 ))
             })?;
             taken.insert(key);

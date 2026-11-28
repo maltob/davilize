@@ -210,6 +210,12 @@ pub fn calc_verify(field: &str, serialized: &str) -> String {
     })
 }
 
+/// A DuckDB error about a calculated field, reworded for the report author.
+#[wasm_bindgen]
+pub fn calc_friendly_reason(raw: &str) -> String {
+    dv_sql::calc::friendly_reason(raw)
+}
+
 // ---------------------------------------------------------------------------
 // Visuals
 // ---------------------------------------------------------------------------
