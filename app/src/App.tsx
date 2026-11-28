@@ -106,7 +106,8 @@ function loadLayout(): LayoutPrefs {
     return {
       panelWidth:
         typeof saved?.panelWidth === "number" && Number.isFinite(saved.panelWidth) ? clampPanel(saved.panelWidth) : PANEL_DEFAULT,
-      panelCollapsed: saved?.panelCollapsed === true,
+      // A narrow window always starts with the panel hidden, whatever a wider window saved.
+      panelCollapsed: saved?.panelCollapsed === true || narrowWindow(),
     };
   } catch {
     return firstLayout();
@@ -115,7 +116,11 @@ function loadLayout(): LayoutPrefs {
 
 /** Layout before the user has chosen one: on a narrow window the data panel starts hidden, so the chart gets the room. */
 function firstLayout(): LayoutPrefs {
-  return { ...DEFAULT_LAYOUT, panelCollapsed: window.innerWidth < 900 };
+  return { ...DEFAULT_LAYOUT, panelCollapsed: narrowWindow() };
+}
+
+function narrowWindow(): boolean {
+  return window.innerWidth < 900;
 }
 
 function saveLayout(prefs: LayoutPrefs) {
@@ -668,7 +673,13 @@ export default function App() {
             onReset={() => setParamValues({})}
           />
         )}
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+        {/* On a phone the actions stay on one row that scrolls sideways, instead of wrapping into
+            four rows; from tablet width up they wrap as before. */}
+        <div
+          role="toolbar"
+          aria-label="Report actions"
+          className="flex w-full items-center gap-2 overflow-x-auto pb-1 *:shrink-0 *:whitespace-nowrap md:ml-auto md:w-auto md:flex-wrap md:overflow-visible md:pb-0"
+        >
           <button
             type="button"
             className={button}
